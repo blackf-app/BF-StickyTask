@@ -1,0 +1,161 @@
+name: release
+
+# Build 3 nền tảng rồi attach vào GitHub Release.
+#   - push tag v*        → build + tạo/cập nhật release của tag đó
+#   - chạy tay          → build thôi, chỉ upload artifact (không tạo release)
+#
+# Windows build ở đây vì không build được trên macOS (cần VS 2022 + Desktop C++).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Pin đúng version đang dùng ở máy dev để không bị SDK mới làm hỏng build.
+  FLUTTER_VERSION: 3.47.2
+
+jobs:
+  # ── macOS ───────────────────────────────────────────────────────────────────
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # lib/env.dart bị gitignore nên checkout của CI KHÔNG có nó → build sạch
+      # sẵn, không thể nhúng URL/key của dev. Tạo bản rỗng cho chắc.
+      - name: Stub lib/env.dart
+        run: cp lib/env.example.dart lib/env.dart
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+      - run: flutter build macos --release
+
+      - name: Zip .app
+        run: |
+          cd build/macos/Build/Products/Release
+          ditto -c -k --sequesterRsrc --keepParent \
+            "BF-StickyTask.app" "$GITHUB_WORKSPACE/BF-StickyTask-macos.zip"
+
+      - name: Verify không rò URL/key
+        run: |
+          app="build/macos/Build/Products/Release/BF-StickyTask.app"
+          if strings "$app/Contents/Frameworks/App.framework/App" \
+               "$app/Contents/Frameworks/App.framework/Resources/flutter_assets/kernel_blob.bin" \
+               2>/dev/null | grep -qE 'sb_publishable_[A-Za-z0-9]|\.supabase\.co'; then
+            echo "::error::binary còn dấu vết Supabase URL/key"; exit 1
+          fi
+          echo "sạch"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: BF-StickyTask-macos.zip
+
+  # ── Windows ─────────────────────────────────────────────────────────────────
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Stub lib/env.dart
+        run: Copy-Item lib/env.example.dart lib/env.dart
+        shell: pwsh
+
+      - run: flutter pub get
+      - run: flutter build windows --release
+
+      - name: Zip bản Windows
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/windows/x64/runner/Release/* `
+            -DestinationPath BF-StickyTask-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: BF-StickyTask-windows.zip
+
+  # ── Android ─────────────────────────────────────────────────────────────────
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Stub lib/env.dart
+        run: cp lib/env.example.dart lib/env.dart
+
+      # Flutter 3.47.2 không build được Android cho BẤT KỲ project nào — bug SDK
+      # ở :gradle:compileGroovy (flutter#173943, flutter#176077). Script này vá
+      # SDK trong runner; nó idempotent và tự báo nếu upstream đã sửa.
+      - name: Vá Flutter SDK cho Android
+        run: bash tools/patch-flutter-sdk.sh
+
+      - run: flutter pub get
+      - run: flutter build apk --release --split-per-abi
+
+      - name: Verify không rò URL/key
+        run: |
+          for apk in build/app/outputs/flutter-apk/*.apk; do
+            unzip -o -q "$apk" -d /tmp/apkchk \
+              'assets/flutter_assets/kernel_blob.bin' 'lib/*/libapp.so' 2>/dev/null || true
+            if find /tmp/apkchk -type f -exec strings {} + 2>/dev/null \
+                 | grep -qE 'sb_publishable_[A-Za-z0-9]|\.supabase\.co'; then
+              echo "::error::$apk còn dấu vết Supabase URL/key"; exit 1
+            fi
+            rm -rf /tmp/apkchk
+          done
+          echo "sạch"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: build/app/outputs/flutter-apk/*.apk
+
+  # ── Release ─────────────────────────────────────────────────────────────────
+  release:
+    needs: [macos, windows, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Gom asset
+        run: |
+          mkdir -p out
+          find dist -type f \( -name '*.zip' -o -name '*.apk' \) -exec cp {} out/ \;
+          ls -la out
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true

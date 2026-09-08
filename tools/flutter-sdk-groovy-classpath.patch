@@ -1,0 +1,20 @@
+diff --git a/packages/flutter_tools/gradle/build.gradle.kts b/packages/flutter_tools/gradle/build.gradle.kts
+index dd7341f6c0e..ed23b2fc8c3 100644
+--- a/packages/flutter_tools/gradle/build.gradle.kts
++++ b/packages/flutter_tools/gradle/build.gradle.kts
+@@ -38,6 +38,15 @@ tasks.withType<JavaCompile> {
+     options.release.set(11)
+ }
+ 
++// PATCH (local): flutter.groovy trong src/main/groovy import class Kotlin cung
++// build (com.flutter.gradle.BaseApplicationNameHandler), nhung Gradle khong tu
++// dua output cua compileKotlin vao classpath cua compileGroovy -> compileGroovy
++// fail va moi ban Android build fail. Xem flutter/flutter#173943, #176077.
++tasks.named<GroovyCompile>("compileGroovy") {
++    dependsOn("compileKotlin")
++    classpath += files(layout.buildDirectory.dir("classes/kotlin/main"))
++}
++
+ tasks.test {
+     useJUnitPlatform()
+ }
