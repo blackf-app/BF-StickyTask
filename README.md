@@ -6,13 +6,20 @@ macOS · Windows · Android — một codebase Flutter, đồng bộ qua Supabas
 | Tab | Làm được gì |
 |-----|-------------|
 | **Current** | thêm, sửa inline, xoá, kéo đổi thứ tự, tick done |
-| **History** | việc đã xong (mới nhất trên đầu), restore về Current, xoá hẳn, xoá cả tab |
+| **History** | việc đã xong (mới nhất trên đầu), **lọc theo ngày**, restore về Current, xoá hẳn, xoá cả tab |
 
 **Mọi thao tác xoá đều có popup xác nhận** — xoá 1 việc ở Current, xoá hẳn ở History,
 "Xoá hết" cả tab History, và "Ngắt" đồng bộ (thao tác đó xoá URL + key đã lưu).
 Popup hiện lại đúng nội dung dòng đang bị xoá để không bấm nhầm dòng.
 Tất cả đi qua `confirmDelete()` trong [lib/ui/confirm_dialog.dart](lib/ui/confirm_dialog.dart)
 — thêm thao tác xoá mới thì gọi hàm đó, đừng dựng AlertDialog riêng.
+
+Tab History có hàng chip lọc theo ngày — **Tất cả · Hôm nay · 7 ngày · 30 ngày · Chọn ngày**
+(khoảng tự chọn qua lịch). Đang lọc thì tiêu đề đổi thành `3/12 việc đã xong`, và **"Xoá hết"
+chỉ xoá đúng những dòng đang hiện** — popup xác nhận nói rõ điều đó. Bộ lọc chỉ sống trong
+phiên chạy: mở lại app là về "Tất cả", để không bao giờ mở app ra thấy History trống mà không
+hiểu vì sao. Mốc so sánh là `doneAt` quy về **giờ địa phương** (note lưu UTC), nên "hôm nay"
+đúng theo lịch của máy đang xem.
 
 Giao diện có 3 mode — **tự động theo hệ thống / sáng / tối** — đổi bằng nút hình mặt trời/mặt trăng
 trên title bar (xoay vòng `system → light → dark`), có trên cả desktop và Android, và được nhớ lại
@@ -47,6 +54,7 @@ Bỏ qua file đó hoàn toàn cũng được. Prefs thắng env.dart ngay khi b
 | `Enter` | ô dưới cùng: thêm việc mới; đang sửa dòng: lưu |
 | nút mặt trời/mặt trăng | đổi giao diện: tự động theo hệ thống → sáng → tối |
 | icon mũi tên vòng / tải xuống | kiểm tra cập nhật (xem [mục Cập nhật](#cập-nhật)) |
+| icon tên lửa | bật/tắt **mở app khi khởi động máy** (xem [mục dưới](#mở-app-khi-khởi-động-máy)) |
 | icon ghim trên title bar | bật/tắt always-on-top |
 | icon `—` | ẩn cửa sổ (app vẫn chạy trong tray) |
 | bấm icon Dock (macOS) | hiện lại cửa sổ đang ẩn |
@@ -65,6 +73,43 @@ Vị trí + kích thước cửa sổ và trạng thái ghim được nhớ qua 
 
 Android: không có always-on-top (Android không cho app thường nổi trên app khác),
 app chạy như app bình thường.
+
+## Mở app khi khởi động máy
+
+Nút **tên lửa** trên title bar (và checkbox *"Mở khi khởi động máy"* trong menu tray của
+Windows) bật/tắt việc OS tự chạy app lúc đăng nhập. Trạng thái thật nằm ở **OS chứ không ở
+prefs**, nên app đọc lại mỗi lần mở — user tắt nó ở System Settings / Task Manager thì nút
+tự về đúng trạng thái. Logic chung ở
+[`lib/app/launch_at_startup.dart`](lib/app/launch_at_startup.dart), hai nền tảng đi hai
+đường khác hẳn:
+
+**macOS — `SMAppService.mainApp`** ([`macos/Runner/LaunchAtLogin.swift`](macos/Runner/LaunchAtLogin.swift)).
+App chạy **sandbox** nên **không ghi được `~/Library/LaunchAgents`** — cách mà hầu hết plugin
+Flutter dùng, và trong sandbox nó *chết câm*: ghi file báo thành công vào container ảo, khởi
+động lại thì không có gì chạy. `SMAppService` là API Apple làm riêng cho login item của app
+sandbox, không cần entitlement thêm.
+
+- Cần **macOS 13+**. Deployment target của project là 12.0 và trong sandbox không còn đường
+  nào khác cho macOS 12 → ở đó native trả `supported = false` và **nút tự ẩn**, chứ không
+  hiện một nút bấm không lên.
+- Status `.requiresApproval` (user từng từ chối, hoặc macOS còn chờ duyệt) vẫn tính là "đang
+  bật" nhưng nút chuyển **màu đỏ** + tooltip chỉ đường
+  **System Settings → General → Login Items**. Không nói ra thì user thấy nút sáng mà máy
+  khởi động lại chẳng thấy app đâu.
+- Login item trỏ vào **đúng bản `.app` lúc bấm bật**. Chuyển app sang chỗ khác
+  (`~/Downloads` → `/Applications`) thì tắt–bật lại một lần.
+
+**Windows — registry `HKCU\…\CurrentVersion\Run`**, ghi thẳng bằng Dart (`win32_registry`),
+không cần code C++ trong runner.
+
+- Giá trị là đường dẫn exe bọc ngoặc kép. App cập nhật hoặc bị chuyển thư mục thì lần mở sau
+  app **tự ghi lại đường dẫn mới** — không bắt user tắt–bật lại nút.
+- Có kiểm cả `…\Explorer\StartupApproved\Run`: byte đầu **lẻ** = user đã tắt ở
+  **Task Manager → Startup**. Bỏ qua chỗ này là app báo "đang bật" trong khi Windows đã chặn.
+  Bật lại trong app thì ghi đè byte đó về 2 (cho chạy).
+
+App **không** tự ẩn khi được OS mở: khởi động máy xong là thấy luôn cửa sổ note.
+Android/Linux không có tính năng này.
 
 ## Backend
 
@@ -182,6 +227,8 @@ lib/
   data/sync_service.dart       push/pull/realtime (không có auth)
   data/update_service.dart     kiểm bản mới trên GitHub Releases + so version
   app/desktop_integration.dart cửa sổ, always-on-top, tray, hotkey, nhớ vị trí
+  app/launch_at_startup.dart   mở app khi khởi động máy (macOS SMAppService / Windows registry)
+  app/history_filter.dart      bộ lọc ngày của tab History (preset + khoảng tự chọn)
   app/settings_controller.dart themeMode (system/light/dark), lưu SharedPreferences
   app/theme.dart               bảng màu giấy note bản sáng + bản tối, context.paper
   ui/home_page.dart            title bar + 2 tab + ô thêm việc
@@ -189,6 +236,7 @@ lib/
   ui/sync_dialog.dart          popup trạng thái đồng bộ + form URL/key
   ui/update_dialog.dart        popup cập nhật: version, release notes, nút tải
   ui/confirm_dialog.dart       confirmDelete() — popup xác nhận cho mọi thao tác xoá
+macos/Runner/LaunchAtLogin.swift  phía native của "mở khi khởi động máy" (SMAppService)
 supabase/schema.sql            bảng + RLS + realtime
 tools/patch-flutter-sdk.sh     vá Flutter SDK để build được Android (xem mục Build)
 tools/migrate-container.sh     chuyển notes.json + prefs sang container của bundle id mới
@@ -375,6 +423,8 @@ Hai thứ dễ hiểu lầm khi kiểm tra:
 flutter test     # logic repo: add / done / restore / reorder / tombstone / merge
                  # so version + trạng thái kiểm cập nhật (không gọi mạng thật)
                  # popup xác nhận của mọi thao tác xoá
+                 # bộ lọc ngày của History (mốc UTC → giờ địa phương) + "Xoá hết" khi đang lọc
+                 # trạng thái mở-khi-khởi-động (channel macOS bị giả lập, không đụng OS)
 ```
 
 `UpdateService` nhận `fetcher` để test không đi mạng — test widget nào dựng

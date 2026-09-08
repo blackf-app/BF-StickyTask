@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../app/desktop_integration.dart';
+import '../app/history_filter.dart';
+import '../app/launch_at_startup.dart';
 import '../app/settings_controller.dart';
 import '../app/theme.dart';
 import '../data/note_repo.dart';
@@ -38,6 +40,11 @@ class _HomePageState extends State<HomePage> {
 
   int _tab = 0;
   String? _editingId;
+
+  /// Bộ lọc ngày của tab History. Chỉ sống trong phiên chạy — mở lại app là
+  /// về "Tất cả", để không có lần nào mở app ra thấy History trống mà không
+  /// hiểu vì sao.
+  HistoryFilter _historyFilter = HistoryFilter.all;
 
   bool get _isDesktop => DesktopIntegration.isSupported;
 
@@ -169,6 +176,7 @@ class _HomePageState extends State<HomePage> {
           _buildUpdateButton(),
           _buildSyncButton(),
           if (_isDesktop) ...[
+            _buildStartupButton(),
             ListenableBuilder(
               listenable: DesktopIntegration.instance,
               builder: (context, _) {
@@ -238,6 +246,46 @@ class _HomePageState extends State<HomePage> {
               : 'Kiểm tra cập nhật',
           onTap: () =>
               showUpdateDialog(context, update, checkOnOpen: !available),
+        );
+      },
+    );
+  }
+
+  /// Nút "mở app khi khởi động máy". Tự ẩn khi nền tảng không làm được
+  /// (Android, hoặc macOS < 13 — xem [LaunchAtStartup]).
+  Widget _buildStartupButton() {
+    return ListenableBuilder(
+      listenable: LaunchAtStartup.instance,
+      builder: (context, _) {
+        final paper = context.paper;
+        final state = LaunchAtStartup.instance.state;
+        if (!state.supported) return const SizedBox.shrink();
+
+        final error = state.error;
+        final (Color? color, String tip) = switch (state) {
+          LaunchAtStartupState(error: final String e) => (
+              paper.danger,
+              'Không đổi được: $e'
+            ),
+          LaunchAtStartupState(enabled: true, requiresApproval: true) => (
+              paper.danger,
+              'Đã bật nhưng macOS còn chờ duyệt — vào System Settings → '
+                  'General → Login Items rồi bật BF-StickyTask'
+            ),
+          LaunchAtStartupState(enabled: true) => (
+              paper.accent,
+              'Tự mở khi khởi động máy — bấm để tắt'
+            ),
+          _ => (null, 'Bật tự mở khi khởi động máy'),
+        };
+
+        return _BarButton(
+          icon: state.enabled && error == null
+              ? Icons.rocket_launch_rounded
+              : Icons.rocket_launch_outlined,
+          color: color,
+          tooltip: tip,
+          onTap: LaunchAtStartup.instance.toggle,
         );
       },
     );
@@ -436,21 +484,29 @@ class _HomePageState extends State<HomePage> {
     }
 
     final paper = context.paper;
+    final filtered = notes
+        .where((n) => _historyFilter.matches(n.doneAt ?? n.updatedAt))
+        .toList();
+    final filtering = _historyFilter.isActive;
+
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 0, 10, 4),
+          padding: const EdgeInsets.fromLTRB(18, 0, 10, 2),
           child: Row(
             children: [
               Expanded(
                 child: Text(
-                  '${notes.length} việc đã xong',
+                  filtering
+                      ? '${filtered.length}/${notes.length} việc đã xong'
+                      : '${notes.length} việc đã xong',
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 11.5, color: paper.inkFaint),
                 ),
               ),
               TextButton(
-                onPressed: () => _confirmClearHistory(notes.length),
+                onPressed:
+                    filtered.isEmpty ? null : () => _confirmClearHistory(filtered),
                 style: TextButton.styleFrom(
                   minimumSize: Size.zero,
                   padding:
@@ -459,33 +515,100 @@ class _HomePageState extends State<HomePage> {
                 ),
                 child: Text(
                   'Xoá hết',
-                  style: TextStyle(fontSize: 11.5, color: paper.danger),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: filtered.isEmpty ? paper.inkFaint : paper.danger,
+                  ),
                 ),
               ),
             ],
           ),
         ),
+        _buildHistoryFilterBar(),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.only(bottom: 10),
-            itemCount: notes.length,
-            itemBuilder: (context, index) {
-              final note = notes[index];
-              return HistoryNoteTile(
-                key: ValueKey(note.id),
-                note: note,
-                onRestore: () => widget.repo.setDone(note.id, false),
-                onDelete: () => _confirmRemove(
-                  note,
-                  title: 'Xoá hẳn việc này?',
-                  message: 'Việc sẽ bị xoá trên mọi máy và không lấy lại được.',
+          child: filtered.isEmpty
+              ? const _EmptyState(
+                  icon: Icons.event_busy_outlined,
+                  title: 'Không có việc nào trong khoảng này',
+                  subtitle: 'Đổi bộ lọc ngày ở trên để xem việc khác.',
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  itemCount: filtered.length,
+                  itemBuilder: (context, index) {
+                    final note = filtered[index];
+                    return HistoryNoteTile(
+                      key: ValueKey(note.id),
+                      note: note,
+                      onRestore: () => widget.repo.setDone(note.id, false),
+                      onDelete: () => _confirmRemove(
+                        note,
+                        title: 'Xoá hẳn việc này?',
+                        message:
+                            'Việc sẽ bị xoá trên mọi máy và không lấy lại được.',
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
         ),
       ],
     );
+  }
+
+  /// Hàng chip lọc theo ngày. Cuộn ngang được vì cửa sổ chỉ rộng ~340px.
+  Widget _buildHistoryFilterBar() {
+    const presets = [
+      HistoryRange.all,
+      HistoryRange.today,
+      HistoryRange.last7Days,
+      HistoryRange.last30Days,
+    ];
+    final custom = _historyFilter.range == HistoryRange.custom;
+
+    return SizedBox(
+      height: 26,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          for (final range in presets)
+            _FilterChip(
+              label: range.label,
+              selected: _historyFilter.range == range,
+              onTap: () => setState(
+                () => _historyFilter = HistoryFilter.preset(range),
+              ),
+            ),
+          _FilterChip(
+            label: custom ? _historyFilter.label : 'Chọn ngày',
+            icon: Icons.calendar_month_outlined,
+            selected: custom,
+            onTap: _pickHistoryRange,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickHistoryRange() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final picked = await showDateRangePicker(
+      context: context,
+      // Note cũ hơn 5 năm thì không còn ai lọc tới; giới hạn cho picker gọn.
+      firstDate: DateTime(now.year - 5),
+      lastDate: today,
+      initialDateRange: _historyFilter.customRange,
+      // Bản lịch chiếm trọn cửa sổ ~340px và vẫn đọc được; bản nhập tay thì
+      // chật đến mức nhãn bị cắt (đã thử). Nút bút chì trong popup vẫn đổi
+      // sang nhập tay được nếu user muốn.
+      helpText: 'Lọc History theo ngày',
+      saveText: 'Lọc',
+      fieldStartLabelText: 'Từ ngày',
+      fieldEndLabelText: 'Đến ngày',
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _historyFilter = HistoryFilter.custom(picked));
   }
 
   /// Xoá một note, có popup xác nhận. Dùng cho cả Current và History.
@@ -508,15 +631,21 @@ class _HomePageState extends State<HomePage> {
     widget.repo.remove(note.id);
   }
 
-  Future<void> _confirmClearHistory(int count) async {
+  /// "Xoá hết" chỉ xoá đúng những dòng đang hiện — đang lọc theo ngày mà xoá
+  /// sạch cả tab thì user mất dữ liệu ngoài khoảng họ đang nhìn.
+  Future<void> _confirmClearHistory(List<Note> shown) async {
+    final filtering = _historyFilter.isActive;
     final ok = await confirmDelete(
       context,
-      title: 'Xoá hết History?',
-      message: '$count việc đã xong sẽ bị xoá trên mọi máy.',
+      title: filtering ? 'Xoá hết trong khoảng đang lọc?' : 'Xoá hết History?',
+      message: filtering
+          ? '${shown.length} việc xong trong "${_historyFilter.label}" sẽ bị '
+              'xoá trên mọi máy. Việc ngoài khoảng này giữ nguyên.'
+          : '${shown.length} việc đã xong sẽ bị xoá trên mọi máy.',
       confirmLabel: 'Xoá hết',
     );
     if (!ok || !mounted) return;
-    widget.repo.clearHistory();
+    widget.repo.removeAll(shown.map((n) => n.id));
   }
 
   // endregion
@@ -580,6 +709,66 @@ class _TabButton extends StatelessWidget {
                   ),
                 ),
               ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Chip nhỏ của hàng lọc ngày ở tab History.
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final paper = context.paper;
+    return Padding(
+      padding: const EdgeInsets.only(right: 5),
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? paper.surface : Colors.transparent,
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(
+              color: selected ? paper.accent : paper.line,
+              width: selected ? 1.1 : 0.8,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(
+                  icon,
+                  size: 12,
+                  color: selected ? paper.accent : paper.inkFaint,
+                ),
+                const SizedBox(width: 4),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: selected ? paper.ink : paper.inkSoft,
+                ),
+              ),
             ],
           ),
         ),

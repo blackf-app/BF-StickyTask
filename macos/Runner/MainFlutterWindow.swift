@@ -8,6 +8,10 @@ class MainFlutterWindow: NSWindow {
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
 
+    // Channel "mở app khi khởi động máy" — không có plugin nào làm được việc
+    // này trong sandbox, xem LaunchAtLogin.swift.
+    LaunchAtLogin.register(with: flutterViewController.engine.binaryMessenger)
+
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     super.awakeFromNib()

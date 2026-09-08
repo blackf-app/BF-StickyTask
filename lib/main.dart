@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app/desktop_integration.dart';
+import 'app/launch_at_startup.dart';
 import 'app/settings_controller.dart';
 import 'app/theme.dart';
 import 'data/local_store.dart';
@@ -20,6 +22,11 @@ Future<void> main() async {
 
   final settings = SettingsController();
   await settings.load();
+
+  // Đọc xem OS đang có đặt mở app lúc khởi động máy không. Trạng thái thật
+  // nằm ở OS (login item macOS / registry Windows) chứ không ở prefs, nên
+  // phải hỏi lại mỗi lần mở — user tắt nó ở System Settings thì app biết.
+  await LaunchAtStartup.instance.load();
 
   // Chỉ đọc version đang chạy + version đã bỏ qua; KHÔNG gọi mạng ở đây để
   // bootstrap không phải chờ GitHub. Việc kiểm bản mới do HomePage kích sau
@@ -93,6 +100,15 @@ class _BfStickyTaskAppState extends State<BfStickyTaskApp>
       builder: (context, _) => MaterialApp(
         title: 'BF-StickyTask',
         debugShowCheckedModeBanner: false,
+        // Chuỗi dựng sẵn của Material (rõ nhất là date picker của bộ lọc
+        // History) theo tiếng Việt cho khớp phần còn lại của app.
+        locale: const Locale('vi'),
+        supportedLocales: const [Locale('vi'), Locale('en')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
         theme: buildStickyTheme(Brightness.light),
         darkTheme: buildStickyTheme(Brightness.dark),
         themeMode: widget.settings.themeMode,

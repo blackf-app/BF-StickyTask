@@ -114,16 +114,22 @@ class NoteRepo extends ChangeNotifier {
     _touch(note);
   }
 
-  void clearHistory() {
-    final done = history;
-    if (done.isEmpty) return;
+  void clearHistory() => removeAll(history.map((n) => n.id));
+
+  /// Xoá nhiều note một lần (dùng cho "Xoá hết" ở History, có thể đang lọc
+  /// theo ngày nên chỉ xoá đúng những dòng đang hiện).
+  void removeAll(Iterable<String> ids) {
     final now = DateTime.now().toUtc();
-    for (final note in done) {
+    var changed = false;
+    for (final id in ids) {
+      final note = _byId[id];
+      if (note == null || note.deleted) continue;
       note.deleted = true;
       note.updatedAt = now;
       note.dirty = true;
+      changed = true;
     }
-    _afterLocalChange();
+    if (changed) _afterLocalChange();
   }
 
   /// Kéo thả đổi thứ tự trong tab Current.

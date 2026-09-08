@@ -10,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'launch_at_startup.dart';
+
 /// Mọi thứ "chỉ có trên desktop": cửa sổ nổi trên cùng, frameless, nhớ vị trí,
 /// icon tray và global hotkey. Trên Android class này không được dùng.
 class DesktopIntegration extends ChangeNotifier with TrayListener, WindowListener {
@@ -86,6 +88,9 @@ class DesktopIntegration extends ChangeNotifier with TrayListener, WindowListene
     windowManager.addListener(this);
     if (_usesTrayManager) {
       trayManager.addListener(this);
+      // Nút trên title bar và checkbox trong menu tray là hai cách bấm cùng
+      // một công tắc — đổi ở đâu thì bên kia cũng phải hiện đúng.
+      LaunchAtStartup.instance.addListener(_refreshTrayMenu);
       await _setUpTray();
     }
     await _setUpHotKey();
@@ -142,6 +147,7 @@ class DesktopIntegration extends ChangeNotifier with TrayListener, WindowListene
 
   Future<void> _refreshTrayMenu() async {
     if (!_usesTrayManager) return;
+    final startup = LaunchAtStartup.instance;
     await trayManager.setContextMenu(
       Menu(
         items: [
@@ -151,6 +157,12 @@ class DesktopIntegration extends ChangeNotifier with TrayListener, WindowListene
             label: 'Luôn nổi trên cùng',
             checked: _alwaysOnTop,
           ),
+          if (startup.supported)
+            MenuItem.checkbox(
+              key: 'startup',
+              label: 'Mở khi khởi động máy',
+              checked: startup.enabled,
+            ),
           MenuItem.separator(),
           MenuItem(key: 'quit', label: 'Thoát'),
         ],
@@ -171,6 +183,8 @@ class DesktopIntegration extends ChangeNotifier with TrayListener, WindowListene
         showWindow();
       case 'pin':
         setAlwaysOnTop(!_alwaysOnTop);
+      case 'startup':
+        LaunchAtStartup.instance.toggle();
       case 'quit':
         quit();
     }
@@ -246,7 +260,10 @@ class DesktopIntegration extends ChangeNotifier with TrayListener, WindowListene
   void dispose() {
     _boundsTimer?.cancel();
     windowManager.removeListener(this);
-    if (_usesTrayManager) trayManager.removeListener(this);
+    if (_usesTrayManager) {
+      trayManager.removeListener(this);
+      LaunchAtStartup.instance.removeListener(_refreshTrayMenu);
+    }
     super.dispose();
   }
 }

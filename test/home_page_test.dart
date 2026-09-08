@@ -78,6 +78,25 @@ Future<void> _addNote(WidgetTester tester, String text) async {
   await tester.pumpAndSettle();
 }
 
+
+/// Dựng 2 việc đã xong: một hôm nay, một cách đây 10 ngày; rồi mở tab History.
+Future<NoteRepo> _pumpHistoryWithOldNote(WidgetTester tester) async {
+  final repo = await _pumpApp(tester);
+  await _addNote(tester, 'viec hom nay');
+  await _addNote(tester, 'viec cu');
+  for (final note in [...repo.current]) {
+    repo.setDone(note.id, true);
+  }
+  await tester.pumpAndSettle();
+
+  repo.history.firstWhere((n) => n.text == 'viec cu').doneAt =
+      DateTime.now().toUtc().subtract(const Duration(days: 10));
+
+  await tester.tap(find.text('History'));
+  await tester.pumpAndSettle();
+  return repo;
+}
+
 void main() {
   testWidgets('thêm việc ở ô dưới thì hiện lên tab Current', (tester) async {
     final repo = await _pumpApp(tester);
@@ -292,6 +311,86 @@ void main() {
     expect(find.text('Cập nhật'), findsOneWidget);
     expect(find.text('Đang dùng: 1.0.0'), findsOneWidget);
     expect(find.text('Đang là bản mới nhất.'), findsOneWidget);
+  });
+
+  testWidgets('chip ngày lọc History, đếm lại theo khoảng đang chọn',
+      (tester) async {
+    await _pumpHistoryWithOldNote(tester);
+
+    expect(find.text('2 việc đã xong'), findsOneWidget);
+    expect(find.text('viec cu'), findsOneWidget);
+
+    await tester.tap(find.text('Hôm nay'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1/2 việc đã xong'), findsOneWidget);
+    expect(find.text('viec hom nay'), findsOneWidget);
+    expect(find.text('viec cu'), findsNothing);
+
+    // 30 ngày thì việc cũ 10 ngày quay lại.
+    await tester.tap(find.text('30 ngày'));
+    await tester.pumpAndSettle();
+    expect(find.text('2/2 việc đã xong'), findsOneWidget);
+    expect(find.text('viec cu'), findsOneWidget);
+
+    await tester.tap(find.text('Tất cả'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 việc đã xong'), findsOneWidget);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('khoảng lọc rỗng thì báo rõ chứ không giống tab chưa có việc',
+      (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'viec nam ngoai');
+    repo.setDone(repo.current.single.id, true);
+    await tester.pumpAndSettle();
+    repo.history.single.doneAt =
+        DateTime.now().toUtc().subtract(const Duration(days: 400));
+
+    await tester.tap(find.text('History'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hôm nay'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('0/1 việc đã xong'), findsOneWidget);
+    expect(find.text('Không có việc nào trong khoảng này'), findsOneWidget);
+    // Hàng chip phải còn đó, không thì user không có đường quay lại.
+    expect(find.text('Tất cả'), findsOneWidget);
+    // Và đây không phải tab rỗng thật.
+    expect(find.text('Chưa có việc nào xong'), findsNothing);
+
+    await tester.tap(find.text('Tất cả'));
+    await tester.pumpAndSettle();
+    expect(find.text('viec nam ngoai'), findsOneWidget);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('Xoá hết khi đang lọc chỉ xoá việc trong khoảng đang xem',
+      (tester) async {
+    final repo = await _pumpHistoryWithOldNote(tester);
+
+    await tester.tap(find.text('Hôm nay'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Xoá hết'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Xoá hết trong khoảng đang lọc?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Xoá hết'));
+    await tester.pumpAndSettle();
+
+    expect(repo.history.single.text, 'viec cu');
+    expect(find.text('Không có việc nào trong khoảng này'), findsOneWidget);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('nền tảng không hỗ trợ thì KHÔNG hiện nút mở-khi-khởi-động',
+      (tester) async {
+    await _pumpApp(tester);
+
+    expect(find.byIcon(Icons.rocket_launch_outlined), findsNothing);
+    expect(find.byIcon(Icons.rocket_launch_rounded), findsNothing);
   });
 
 }
