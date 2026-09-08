@@ -47,15 +47,14 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             "BF-StickyTask.app" "$GITHUB_WORKSPACE/BF-StickyTask-macos.zip"
 
+      # Logic soi ở tools/scan-secrets.sh — một chỗ duy nhất, dùng chung với
+      # tools/build-release.sh. Đừng viết lại regex ở đây.
       - name: Verify không rò URL/key
         run: |
-          app="build/macos/Build/Products/Release/BF-StickyTask.app"
-          if strings "$app/Contents/Frameworks/App.framework/App" \
-               "$app/Contents/Frameworks/App.framework/Resources/flutter_assets/kernel_blob.bin" \
-               2>/dev/null | grep -qE 'sb_publishable_[A-Za-z0-9]|\.supabase\.co'; then
-            echo "::error::binary còn dấu vết Supabase URL/key"; exit 1
-          fi
-          echo "sạch"
+          app="build/macos/Build/Products/Release/BF-StickyTask.app/Contents/Frameworks"
+          bash tools/scan-secrets.sh \
+            "$app/App.framework/App" \
+            "$app/App.framework/Resources/flutter_assets/kernel_blob.bin"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -80,6 +79,12 @@ jobs:
 
       - run: flutter pub get
       - run: flutter build windows --release
+
+      - name: Verify không rò URL/key
+        shell: bash
+        run: |
+          find build/windows -type f \( -name '*.exe' -o -name 'app.so' \) -print0 \
+            | xargs -0 bash tools/scan-secrets.sh
 
       - name: Zip bản Windows
         shell: pwsh
@@ -123,16 +128,14 @@ jobs:
 
       - name: Verify không rò URL/key
         run: |
-          for apk in build/app/outputs/flutter-apk/*.apk; do
+          for apk in build/app/outputs/flutter-apk/*-release.apk; do
+            rm -rf /tmp/apkchk
             unzip -o -q "$apk" -d /tmp/apkchk \
               'assets/flutter_assets/kernel_blob.bin' 'lib/*/libapp.so' 2>/dev/null || true
-            if find /tmp/apkchk -type f -exec strings {} + 2>/dev/null \
-                 | grep -qE 'sb_publishable_[A-Za-z0-9]|\.supabase\.co'; then
-              echo "::error::$apk còn dấu vết Supabase URL/key"; exit 1
-            fi
-            rm -rf /tmp/apkchk
+            echo "gói $(basename "$apk")"
+            find /tmp/apkchk -type f -print0 \
+              | xargs -0 bash tools/scan-secrets.sh
           done
-          echo "sạch"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -62,47 +62,46 @@ echo
 restore
 
 # ── Kiểm chứng: soi binary xem còn dấu vết cấu hình không ─────────────────────
+# Logic soi nằm ở tools/scan-secrets.sh (một chỗ duy nhất) — xem comment trong
+# file đó về bug pipefail/SIGPIPE và bug false-positive placeholder.
 echo "→ Soi binary vừa build:"
-leaked=0
-check() { # <mô tả> <file>
-  [[ -f "$2" ]] || return 0
-  if strings "$2" 2>/dev/null | grep -qE 'sb_publishable_[A-Za-z0-9]|\.supabase\.co'; then
-    printf '   \033[31mRÒ\033[0m   %s\n' "$1"
-    leaked=1
-  else
-    printf '   \033[32msạch\033[0m %s\n' "$1"
-  fi
-}
+targets=()
 
 case "$target" in
   macos)
     app=$(ls -d build/macos/Build/Products/Release/*.app 2>/dev/null | head -1)
     if [[ -n "$app" ]]; then
-      check "$app/Contents/Frameworks/App.framework/App" \
-            "$app/Contents/Frameworks/App.framework/App"
-      check "$app (flutter_assets)" \
-            "$app/Contents/Frameworks/App.framework/Resources/flutter_assets/kernel_blob.bin"
-      echo "   → $app"
+      # Release là AOT: code Dart nằm trong App.framework/App, không có
+      # kernel_blob.bin (đó là bản debug/JIT). Truyền cả hai, thiếu thì bỏ qua.
+      targets+=("$app/Contents/Frameworks/App.framework/App")
+      targets+=("$app/Contents/Frameworks/App.framework/Resources/flutter_assets/kernel_blob.bin")
     fi ;;
-  apk)
-    for f in build/app/outputs/flutter-apk/*.apk; do
-      [[ -f "$f" ]] || continue
+  windows)
+    while IFS= read -r f; do targets+=("$f"); done \
+      < <(find build/windows -type f \( -name 'app.so' -o -name '*.exe' -o -name 'kernel_blob.bin' \) 2>/dev/null)
+    ;;
+  apk|appbundle)
+    outdir=build/app/outputs
+    while IFS= read -r pkg; do
       tmp=$(mktemp -d)
-      unzip -o -q "$f" -d "$tmp" 'assets/flutter_assets/kernel_blob.bin' 'lib/*/libapp.so' 2>/dev/null || true
-      hit=0
-      while IFS= read -r g; do
-        strings "$g" 2>/dev/null | grep -qE 'sb_publishable_[A-Za-z0-9]|\.supabase\.co' && hit=1
-      done < <(find "$tmp" -type f 2>/dev/null)
-      if [[ "$hit" == "1" ]]; then
-        printf '   \033[31mRÒ\033[0m   %s\n' "$(basename "$f")"; leaked=1
-      else
-        printf '   \033[32msạch\033[0m %s\n' "$(basename "$f")"
+      unzip -o -q "$pkg" -d "$tmp" \
+        'assets/flutter_assets/kernel_blob.bin' 'lib/*/libapp.so' \
+        'base/assets/flutter_assets/kernel_blob.bin' 'base/lib/*/libapp.so' 2>/dev/null || true
+      # Giải nén ra rồi soi từng file, kèm tên gói cho dễ đọc.
+      if [[ -n "$(find "$tmp" -type f 2>/dev/null)" ]]; then
+        printf '   gói %s\n' "$(basename "$pkg")"
+        while IFS= read -r g; do targets+=("$g"); done < <(find "$tmp" -type f)
       fi
-      rm -rf "$tmp"
-    done ;;
+    done < <(find "$outdir" -type f \( -name '*-release.apk' -o -name '*.aab' \) 2>/dev/null)
+    ;;
   *)
     echo "   (chưa có bước soi tự động cho '$target')" ;;
 esac
+
+leaked=0
+if [[ ${#targets[@]} -gt 0 ]]; then
+  bash "$ROOT/tools/scan-secrets.sh" "${targets[@]}" || leaked=1
+fi
 
 echo
 if [[ "$leaked" == "1" ]]; then
