@@ -7,9 +7,12 @@ import '../app/settings_controller.dart';
 import '../app/theme.dart';
 import '../data/note_repo.dart';
 import '../data/sync_service.dart';
+import '../data/update_service.dart';
 import '../models/note.dart';
+import 'confirm_dialog.dart';
 import 'note_tile.dart';
 import 'sync_dialog.dart';
+import 'update_dialog.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -17,11 +20,13 @@ class HomePage extends StatefulWidget {
     required this.repo,
     required this.sync,
     required this.settings,
+    required this.update,
   });
 
   final NoteRepo repo;
   final SyncService sync;
   final SettingsController settings;
+  final UpdateService update;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -35,6 +40,21 @@ class _HomePageState extends State<HomePage> {
   String? _editingId;
 
   bool get _isDesktop => DesktopIntegration.isSupported;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkUpdateOnStartup());
+  }
+
+  /// Kiểm bản mới khi mở app. Chỉ bật popup khi thật có bản mới và user chưa
+  /// bấm "Bỏ qua bản này" — lỗi mạng thì im lặng, trạng thái vẫn nằm trong
+  /// UpdateService để nút trên title bar hiện.
+  Future<void> _checkUpdateOnStartup() async {
+    final release = await widget.update.checkOnStartup();
+    if (release == null || !mounted) return;
+    await showUpdateDialog(context, widget.update);
+  }
 
   @override
   void dispose() {
@@ -146,6 +166,7 @@ class _HomePageState extends State<HomePage> {
             child: _isDesktop ? DragToMoveArea(child: label) : label,
           ),
           _buildThemeButton(),
+          _buildUpdateButton(),
           _buildSyncButton(),
           if (_isDesktop) ...[
             ListenableBuilder(
@@ -194,6 +215,29 @@ class _HomePageState extends State<HomePage> {
           icon: icon,
           tooltip: 'Giao diện: $label — bấm để đổi',
           onTap: widget.settings.cycleThemeMode,
+        );
+      },
+    );
+  }
+
+  /// Nút kiểm tra cập nhật. Đổi sang màu accent khi đã biết có bản mới, để
+  /// user đóng popup rồi vẫn thấy dấu hiệu còn bản mới đang chờ.
+  Widget _buildUpdateButton() {
+    return ListenableBuilder(
+      listenable: widget.update,
+      builder: (context, _) {
+        final update = widget.update;
+        final available = update.updateAvailable;
+        return _BarButton(
+          icon: available
+              ? Icons.system_update_alt_rounded
+              : Icons.refresh_rounded,
+          color: available ? context.paper.accent : null,
+          tooltip: available
+              ? 'Có bản mới ${update.latest?.version ?? ''} — bấm để xem'
+              : 'Kiểm tra cập nhật',
+          onTap: () =>
+              showUpdateDialog(context, update, checkOnOpen: !available),
         );
       },
     );
@@ -327,10 +371,11 @@ class _HomePageState extends State<HomePage> {
               setState(() => _editingId = null);
             }
           },
-          onDelete: () {
-            setState(() => _editingId = null);
-            widget.repo.remove(note.id);
-          },
+          onDelete: () => _confirmRemove(
+            note,
+            title: 'Xoá việc này?',
+            message: 'Việc sẽ bị xoá trên mọi máy.',
+          ),
         );
       },
     );
@@ -430,7 +475,11 @@ class _HomePageState extends State<HomePage> {
                 key: ValueKey(note.id),
                 note: note,
                 onRestore: () => widget.repo.setDone(note.id, false),
-                onDelete: () => widget.repo.remove(note.id),
+                onDelete: () => _confirmRemove(
+                  note,
+                  title: 'Xoá hẳn việc này?',
+                  message: 'Việc sẽ bị xoá trên mọi máy và không lấy lại được.',
+                ),
               );
             },
           ),
@@ -439,31 +488,35 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _confirmClearHistory(int count) async {
-    final paper = context.paper;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: paper.surface,
-        title: const Text('Xoá hết History?', style: TextStyle(fontSize: 15)),
-        content: Text(
-          '$count việc đã xong sẽ bị xoá trên mọi máy.',
-          style: TextStyle(fontSize: 12.5, color: paper.inkSoft),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Thôi'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: paper.danger),
-            child: const Text('Xoá hết'),
-          ),
-        ],
-      ),
+  /// Xoá một note, có popup xác nhận. Dùng cho cả Current và History.
+  Future<void> _confirmRemove(
+    Note note, {
+    required String title,
+    required String message,
+  }) async {
+    // Thoát editor trước khi mở dialog. InlineEditor tự commit khi mất focus,
+    // mà mở dialog là nó mất focus — để nó sống thì bấm "Thôi" vẫn âm thầm lưu
+    // một lần sửa mà user không hề xác nhận.
+    if (_editingId != null) setState(() => _editingId = null);
+    final ok = await confirmDelete(
+      context,
+      title: title,
+      message: message,
+      detail: note.text,
     );
-    if (ok == true) widget.repo.clearHistory();
+    if (!ok || !mounted) return;
+    widget.repo.remove(note.id);
+  }
+
+  Future<void> _confirmClearHistory(int count) async {
+    final ok = await confirmDelete(
+      context,
+      title: 'Xoá hết History?',
+      message: '$count việc đã xong sẽ bị xoá trên mọi máy.',
+      confirmLabel: 'Xoá hết',
+    );
+    if (!ok || !mounted) return;
+    widget.repo.clearHistory();
   }
 
   // endregion

@@ -157,4 +157,68 @@ void main() {
     // TRƯỚC khi chạy addTearDown, mà cấu hình thành công có dựng pull timer 60s.
     sync.dispose();
   });
+
+  testWidgets('Ngắt phải qua popup confirm — bấm Thôi thì cấu hình còn nguyên',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'flutter.sync_url': 'https://abcdefghijklmnop.supabase.co',
+      'flutter.sync_publishable_key': 'sb_publishable_AbCdEf123456',
+    });
+
+    final repo = NoteRepo(_MemoryStore());
+    await repo.load();
+    final sync = SyncService(repo);
+    await sync.applyConfig(
+      SyncConfig.sanitized(
+        url: 'https://abcdefghijklmnop.supabase.co',
+        key: 'sb_publishable_AbCdEf123456',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildStickyTheme(Brightness.light),
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showSyncDialog(context, sync),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Ngắt'));
+    await tester.pumpAndSettle();
+
+    // Popup xác nhận, có nhắc project ref đang bị ngắt.
+    expect(find.text('Ngắt đồng bộ?'), findsOneWidget);
+    expect(find.text('abcdefghijklmnop'), findsNWidgets(2));
+
+    await tester.tap(find.text('Thôi'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ngắt đồng bộ?'), findsNothing);
+    expect(sync.configured, isTrue);
+    expect(sync.config.publishableKey, 'sb_publishable_AbCdEf123456');
+
+    // Bấm lại rồi xác nhận thì mới ngắt thật.
+    await tester.tap(find.text('Ngắt'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Ngắt'));
+    await tester.pumpAndSettle();
+
+    expect(sync.configured, isFalse);
+    expect(sync.config.isEmpty, isTrue);
+
+    // Không assert phần UI sau khi ngắt: `_teardown()` await
+    // `SupabaseClient.dispose()`, mà trong test không có kết nối thật nên
+    // future đó không về → setState cuối của `_disconnect` chưa chạy. Cái cần
+    // kiểm ở đây là popup chặn được thao tác xoá, và nó đã kiểm ở trên.
+    sync.dispose();
+  });
+
 }

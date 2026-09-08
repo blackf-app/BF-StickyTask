@@ -6,6 +6,7 @@ import 'app/theme.dart';
 import 'data/local_store.dart';
 import 'data/note_repo.dart';
 import 'data/sync_service.dart';
+import 'data/update_service.dart';
 import 'ui/home_page.dart';
 
 Future<void> main() async {
@@ -20,11 +21,18 @@ Future<void> main() async {
   final settings = SettingsController();
   await settings.load();
 
+  // Chỉ đọc version đang chạy + version đã bỏ qua; KHÔNG gọi mạng ở đây để
+  // bootstrap không phải chờ GitHub. Việc kiểm bản mới do HomePage kích sau
+  // frame đầu (xem `_checkUpdateOnStartup`).
+  final update = UpdateService();
+  await update.load();
+
   runApp(
     BfStickyTaskApp(
       repo: repo,
       sync: SyncService(repo),
       settings: settings,
+      update: update,
     ),
   );
 }
@@ -35,11 +43,13 @@ class BfStickyTaskApp extends StatefulWidget {
     required this.repo,
     required this.sync,
     required this.settings,
+    required this.update,
   });
 
   final NoteRepo repo;
   final SyncService sync;
   final SettingsController settings;
+  final UpdateService update;
 
   @override
   State<BfStickyTaskApp> createState() => _BfStickyTaskAppState();
@@ -92,6 +102,7 @@ class _BfStickyTaskAppState extends State<BfStickyTaskApp>
             repo: widget.repo,
             sync: widget.sync,
             settings: widget.settings,
+            update: widget.update,
           ),
         ),
       ),

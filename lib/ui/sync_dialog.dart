@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app/theme.dart';
 import '../data/sync_config.dart';
 import '../data/sync_service.dart';
+import 'confirm_dialog.dart';
 
 /// Popup đồng bộ: nhập Supabase URL + publishable key, xem trạng thái, sync tay.
 /// Không có đăng nhập — key là toàn bộ thứ cần để đồng bộ.
@@ -75,6 +76,20 @@ class _SyncDialogState extends State<_SyncDialog> {
   }
 
   Future<void> _disconnect() async {
+    // Ngắt là XOÁ cấu hình đã lưu (URL + key) khỏi máy này, và ở bản release
+    // env.dart không mồi lại được → phải đi tìm lại key. Hỏi trước.
+    final ok = await confirmDelete(
+      context,
+      title: 'Ngắt đồng bộ?',
+      message: 'Xoá URL + publishable key đã lưu trên máy này. Note vẫn còn '
+          '(local và trên server), nhưng phải nhập lại key mới đồng bộ tiếp.',
+      detail: widget.sync.config.projectRef.isEmpty
+          ? null
+          : widget.sync.config.projectRef,
+      confirmLabel: 'Ngắt',
+    );
+    if (!ok || !mounted) return;
+
     setState(() => _busy = true);
     await widget.sync.applyConfig(null);
     if (!mounted) return;

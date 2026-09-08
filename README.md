@@ -8,6 +8,12 @@ macOS · Windows · Android — một codebase Flutter, đồng bộ qua Supabas
 | **Current** | thêm, sửa inline, xoá, kéo đổi thứ tự, tick done |
 | **History** | việc đã xong (mới nhất trên đầu), restore về Current, xoá hẳn, xoá cả tab |
 
+**Mọi thao tác xoá đều có popup xác nhận** — xoá 1 việc ở Current, xoá hẳn ở History,
+"Xoá hết" cả tab History, và "Ngắt" đồng bộ (thao tác đó xoá URL + key đã lưu).
+Popup hiện lại đúng nội dung dòng đang bị xoá để không bấm nhầm dòng.
+Tất cả đi qua `confirmDelete()` trong [lib/ui/confirm_dialog.dart](lib/ui/confirm_dialog.dart)
+— thêm thao tác xoá mới thì gọi hàm đó, đừng dựng AlertDialog riêng.
+
 Giao diện có 3 mode — **tự động theo hệ thống / sáng / tối** — đổi bằng nút hình mặt trời/mặt trăng
 trên title bar (xoay vòng `system → light → dark`), có trên cả desktop và Android, và được nhớ lại
 sau khi tắt app. Bảng màu tối giữ tông nâu ấm để vẫn ra dáng giấy note.
@@ -40,6 +46,7 @@ Bỏ qua file đó hoàn toàn cũng được. Prefs thắng env.dart ngay khi b
 | `Esc` | đang sửa dòng → huỷ sửa; không sửa gì → ẩn cửa sổ |
 | `Enter` | ô dưới cùng: thêm việc mới; đang sửa dòng: lưu |
 | nút mặt trời/mặt trăng | đổi giao diện: tự động theo hệ thống → sáng → tối |
+| icon mũi tên vòng / tải xuống | kiểm tra cập nhật (xem [mục Cập nhật](#cập-nhật)) |
 | icon ghim trên title bar | bật/tắt always-on-top |
 | icon `—` | ẩn cửa sổ (app vẫn chạy trong tray) |
 | bấm icon Dock (macOS) | hiện lại cửa sổ đang ẩn |
@@ -121,6 +128,47 @@ Local-first: mọi thao tác ghi vào RAM + `notes.json` ngay, UI không bao gi�
 `updated_at` do client ghi nên **đồng hồ máy phải đúng** — một máy lệch giờ nhiều sẽ luôn
 thắng khi merge.
 
+## Cập nhật
+
+App tự kiểm bản mới **khi mở** và hiện popup nếu có, ngoài ra có nút kiểm tay
+trên title bar (icon mũi tên vòng; đổi thành icon tải xuống + màu accent khi
+đang có bản mới chờ).
+
+Nguồn là **GitHub Releases** của chính repo này:
+
+```
+GET https://api.github.com/repos/blackf-app/BF-StickyTask/releases/latest
+```
+
+- **Không token.** Repo phải là **public**, không thì GitHub trả 404 và tính
+  năng chết câm. Đừng "sửa" bằng cách nhúng PAT vào app: `strings` là ra ngay,
+  đúng thứ [`tools/scan-secrets.sh`](tools/scan-secrets.sh) tồn tại để chặn.
+- **So version** lấy từ `pubspec.yaml` (qua `package_info_plus`) với `tag_name`
+  của release. Tag `v1.0.1`, build metadata `1.0.1+7`, pre-release `1.0.1-beta`
+  đều quy về `1.0.1` rồi so từng thành phần số.
+- **Không tự tải, không tự cài.** Popup hiện release notes + nút mở trang
+  release trên browser để tự tải bản đúng máy. Tự ghi đè app đang chạy là việc
+  khác hẳn: macOS chạy sandbox không tự thay `.app` được, Windows cần helper
+  process riêng.
+- **"Bỏ qua bản này"** ghi version vào SharedPreferences (`update_skipped_version`)
+  nên lần mở app sau không popup lại — nhưng bấm nút kiểm tay thì vẫn báo.
+- **Lỗi mạng lúc mở app thì im lặng**, không ai muốn vừa mở app đã ăn popup lỗi.
+  Trạng thái vẫn nằm trong `UpdateService` để popup hiện khi user tự mở.
+
+`/releases/latest` bỏ qua draft và pre-release, nên muốn user thấy bản mới thì
+release phải được publish thật. Cách ra bản mới:
+
+```bash
+# 1. nâng version trong pubspec.yaml, ví dụ: version: 1.0.1+2
+# 2. commit rồi push tag — workflow release.yml build 3 nền tảng + tạo release
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+Tag phải khớp version trong `pubspec.yaml`, không thì máy đang chạy bản cũ so ra
+sai. Android 11+ cần khối `<queries>` với `android.intent.action.VIEW` + scheme
+`https` trong `AndroidManifest.xml` — thiếu là `url_launcher` không thấy browser
+nào và nút "Tải bản mới" không mở được trang.
+
 ## Cấu trúc
 
 ```
@@ -132,12 +180,15 @@ lib/
   data/note_repo.dart          nguồn sự thật: CRUD, done/restore, reorder, merge LWW
   data/sync_config.dart        SyncConfig (URL + publishable key) + đọc/ghi prefs
   data/sync_service.dart       push/pull/realtime (không có auth)
+  data/update_service.dart     kiểm bản mới trên GitHub Releases + so version
   app/desktop_integration.dart cửa sổ, always-on-top, tray, hotkey, nhớ vị trí
   app/settings_controller.dart themeMode (system/light/dark), lưu SharedPreferences
   app/theme.dart               bảng màu giấy note bản sáng + bản tối, context.paper
   ui/home_page.dart            title bar + 2 tab + ô thêm việc
   ui/note_tile.dart            dòng note (Current / History) + editor inline
   ui/sync_dialog.dart          popup trạng thái đồng bộ + form URL/key
+  ui/update_dialog.dart        popup cập nhật: version, release notes, nút tải
+  ui/confirm_dialog.dart       confirmDelete() — popup xác nhận cho mọi thao tác xoá
 supabase/schema.sql            bảng + RLS + realtime
 tools/patch-flutter-sdk.sh     vá Flutter SDK để build được Android (xem mục Build)
 tools/migrate-container.sh     chuyển notes.json + prefs sang container của bundle id mới
@@ -288,4 +339,9 @@ flutter build apk --release --split-per-abi   # ~20MB mỗi ABI
 
 ```bash
 flutter test     # logic repo: add / done / restore / reorder / tombstone / merge
+                 # so version + trạng thái kiểm cập nhật (không gọi mạng thật)
+                 # popup xác nhận của mọi thao tác xoá
 ```
+
+`UpdateService` nhận `fetcher` để test không đi mạng — test widget nào dựng
+`HomePage` cũng phải truyền fetcher giả, vì `HomePage` kiểm bản mới ngay khi mở.

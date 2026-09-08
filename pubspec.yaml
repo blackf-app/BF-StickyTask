@@ -43,6 +43,11 @@ dependencies:
   path_provider: ^2.1.6
   uuid: ^4.6.0
   shared_preferences: ^2.5.5
+  # Ba cái dưới đây là cho việc kiểm bản mới (xem lib/data/update_service.dart):
+  # đọc version đang chạy từ pubspec, gọi GitHub API, mở trang release.
+  package_info_plus: ^10.2.1
+  url_launcher: ^6.3.2
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

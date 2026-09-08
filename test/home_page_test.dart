@@ -1,9 +1,11 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:bf_stickytask/app/settings_controller.dart';
 import 'package:bf_stickytask/data/local_store.dart';
 import 'package:bf_stickytask/data/note_repo.dart';
 import 'package:bf_stickytask/data/sync_service.dart';
+import 'package:bf_stickytask/data/update_service.dart';
 import 'package:bf_stickytask/app/theme.dart';
 import 'package:bf_stickytask/ui/home_page.dart';
 
@@ -19,6 +21,7 @@ Future<NoteRepo> _pumpApp(
   WidgetTester tester, {
   SettingsController? settings,
   Brightness brightness = Brightness.light,
+  UpdateService? update,
 }) async {
   final repo = NoteRepo(_MemoryStore());
   await repo.load();
@@ -30,6 +33,9 @@ Future<NoteRepo> _pumpApp(
           repo: repo,
           sync: SyncService(repo),
           settings: settings ?? SettingsController(),
+          // Fetcher trả null: HomePage kiểm bản mới lúc mở nên test KHÔNG
+          // được để nó gọi GitHub thật.
+          update: update ?? _offlineUpdate(),
         ),
       ),
     ),
@@ -38,9 +44,31 @@ Future<NoteRepo> _pumpApp(
   return repo;
 }
 
+UpdateService _offlineUpdate() =>
+    UpdateService(fetcher: () async => null, currentVersion: '1.0.0');
+
 /// Cho debounce ghi file (200ms) chạy hết để test không còn timer treo.
 Future<void> _drainDebounce(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 300));
+  await tester.pumpAndSettle();
+}
+
+/// Hover vào dòng [row] rồi bấm nút xoá của nó. Trên desktop `_TileAction`
+/// chỉ hiện khi hover — chưa hover là `IgnorePointer` nên tap không ăn.
+///
+/// Pointer được nhả ngay sau khi tap: thêm pointer chuột thứ hai khi chưa nhả
+/// cái đầu là vỡ assert trong MouseTracker, mà test xoá thì bấm 2 lần (huỷ
+/// rồi xoá thật).
+Future<void> _tapDelete(WidgetTester tester, Finder row) async {
+  final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+  await gesture.addPointer(location: Offset.zero);
+  await gesture.moveTo(tester.getCenter(row));
+  await tester.pumpAndSettle();
+
+  await tester.tap(find.byIcon(Icons.close_rounded));
+  await tester.pumpAndSettle();
+
+  await gesture.removePointer();
   await tester.pumpAndSettle();
 }
 
@@ -142,4 +170,128 @@ void main() {
     expect(text.style?.color, PaperColors.dark.ink);
     await _drainDebounce(tester);
   });
+
+  testWidgets('xoá ở Current phải qua popup confirm — bấm Thôi thì việc còn',
+      (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'dung xoa toi');
+
+    await _tapDelete(tester, find.text('dung xoa toi'));
+
+    // Popup hiện, và hiện lại đúng nội dung dòng đang bị xoá.
+    expect(find.text('Xoá việc này?'), findsOneWidget);
+    expect(find.text('dung xoa toi'), findsNWidgets(2));
+
+    await tester.tap(find.text('Thôi'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Xoá việc này?'), findsNothing);
+    expect(repo.current.single.text, 'dung xoa toi');
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('xoá ở Current — bấm Xoá trong popup thì việc mất',
+      (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'xoa that');
+
+    await _tapDelete(tester, find.text('xoa that'));
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Xoá'));
+    await tester.pumpAndSettle();
+
+    expect(repo.current, isEmpty);
+    expect(find.text('Không còn việc nào'), findsOneWidget);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('xoá ở History phải qua popup confirm', (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'viec da xong');
+    repo.setDone(repo.current.single.id, true);
+    await tester.tap(find.text('History'));
+    await tester.pumpAndSettle();
+
+    await _tapDelete(tester, find.text('viec da xong'));
+
+    expect(find.text('Xoá hẳn việc này?'), findsOneWidget);
+
+    await tester.tap(find.text('Thôi'));
+    await tester.pumpAndSettle();
+    expect(repo.history.single.text, 'viec da xong');
+
+    // Lần hai thì xoá thật.
+    await _tapDelete(tester, find.text('viec da xong'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Xoá'));
+    await tester.pumpAndSettle();
+
+    expect(repo.history, isEmpty);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('Xoá hết History phải qua popup confirm', (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'a');
+    await _addNote(tester, 'b');
+    for (final note in [...repo.current]) {
+      repo.setDone(note.id, true);
+    }
+    await tester.tap(find.text('History'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Xoá hết'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Xoá hết History?'), findsOneWidget);
+    expect(find.text('2 việc đã xong sẽ bị xoá trên mọi máy.'), findsOneWidget);
+
+    await tester.tap(find.text('Thôi'));
+    await tester.pumpAndSettle();
+    expect(repo.history.length, 2);
+
+    await tester.tap(find.text('Xoá hết'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Xoá hết'));
+    await tester.pumpAndSettle();
+
+    expect(repo.history, isEmpty);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('có bản mới thì popup tự bật khi mở app', (tester) async {
+    await _pumpApp(
+      tester,
+      update: UpdateService(
+        fetcher: () async => const AppRelease(
+          version: '1.2.0',
+          tag: 'v1.2.0',
+          notes: 'thêm auto update',
+          pageUrl: 'https://github.com/x/y/releases/tag/v1.2.0',
+        ),
+        currentVersion: '1.0.0',
+      ),
+    );
+
+    expect(find.text('Cập nhật'), findsOneWidget);
+    expect(find.text('Có bản mới: 1.2.0'), findsOneWidget);
+    expect(find.text('thêm auto update'), findsOneWidget);
+    expect(find.text('Tải bản mới'), findsOneWidget);
+  });
+
+  testWidgets('đang bản mới nhất thì KHÔNG popup lúc mở app', (tester) async {
+    await _pumpApp(tester);
+    expect(find.text('Cập nhật'), findsNothing);
+  });
+
+  testWidgets('bấm nút trên title bar thì mở popup cập nhật', (tester) async {
+    await _pumpApp(tester);
+
+    await tester.tap(find.byIcon(Icons.refresh_rounded));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Cập nhật'), findsOneWidget);
+    expect(find.text('Đang dùng: 1.0.0'), findsOneWidget);
+    expect(find.text('Đang là bản mới nhất.'), findsOneWidget);
+  });
+
 }

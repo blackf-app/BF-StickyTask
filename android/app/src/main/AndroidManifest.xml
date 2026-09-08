@@ -43,5 +43,12 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Android 11+ (package visibility): thiếu khối này thì url_launcher
+             không thấy browser nào → nút "Tải bản mới" trong popup cập nhật
+             không mở được trang release. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
     </queries>
 </manifest>
