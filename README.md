@@ -195,6 +195,7 @@ tools/migrate-container.sh     chuyển notes.json + prefs sang container của 
 tools/check-backend.sh         soi backend: bảng, schema đã migrate chưa, quyền ghi
 tools/build-release.sh         build release KHÔNG nhúng env.dart + soi lại binary
 tools/scan-secrets.sh          soi binary xem có nhúng Supabase URL/key thật không
+tools/gen-icons.py             sinh icon app cho macOS/Windows/Android từ một bản vẽ
 supabase/cron-purge-tombstones.sql  pg_cron dọn tombstone hằng ngày
 ```
 
@@ -334,6 +335,39 @@ APK ra 52.9MB vì là universal (đủ mọi ABI). Muốn nhỏ hơn cho máy th
 ```bash
 flutter build apk --release --split-per-abi   # ~20MB mỗi ABI
 ```
+
+## Icon app
+
+Icon của cả 3 nền tảng sinh từ **một bản vẽ duy nhất** trong
+[`tools/gen-icons.py`](tools/gen-icons.py) (cần Pillow). Sửa màu/hình thì sửa
+trong script rồi chạy lại — đừng chỉnh tay 20+ file PNG, lệch nhau ngay:
+
+```bash
+python3 tools/gen-icons.py
+```
+
+Nó ghi đè:
+
+```
+macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_*.png   16→1024, lề + bóng kiểu Apple
+windows/runner/resources/app_icon.ico                            .ico đa cỡ 16→256
+android/app/src/main/res/mipmap-*/ic_launcher.png                icon legacy (máy trước API 26)
+android/app/src/main/res/mipmap-*/ic_launcher_{fore,back}ground.png  layer cho adaptive icon
+android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml        adaptive icon (Android 8+)
+```
+
+Hình vẽ: nền bo góc hổ phách (`accent` của `PaperColors`) + tờ note giấy kem gập
+góc, 2 dòng kẻ và một dấu check — cùng ngôn ngữ hình với icon tray ở
+`assets/tray/` để menu bar và Dock trông cùng một app.
+
+Hai thứ dễ hiểu lầm khi kiểm tra:
+
+- **`AppIcon.icns` trong bản build chỉ có 4 cỡ** (16, 32, 128, 256). Không phải
+  thiếu icon: macOS đời mới đọc icon từ `Assets.car` (có đủ 10 rendition, tới
+  512@2x), `.icns` chỉ là bản dự phòng cho hệ cũ. `actool` cố tình làm vậy —
+  bản build với icon default của Flutter cũng ra đúng 4 cỡ đó.
+- **Foreground của adaptive icon phải chừa safe zone** 66/108: launcher mỗi máy
+  cắt theo mask riêng (tròn, squircle...), vẽ tràn viền là mất góc gập.
 
 ## Test
 
