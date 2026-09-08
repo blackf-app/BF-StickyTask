@@ -143,6 +143,7 @@ tools/patch-flutter-sdk.sh     vá Flutter SDK để build được Android (xem
 tools/migrate-container.sh     chuyển notes.json + prefs sang container của bundle id mới
 tools/check-backend.sh         soi backend: bảng, schema đã migrate chưa, quyền ghi
 tools/build-release.sh         build release KHÔNG nhúng env.dart + soi lại binary
+tools/scan-secrets.sh          soi binary xem có nhúng Supabase URL/key thật không
 supabase/cron-purge-tombstones.sql  pg_cron dọn tombstone hằng ngày
 ```
 
@@ -214,8 +215,21 @@ bash tools/build-release.sh apk --split-per-abi
 ```
 
 Script tạm thay `lib/env.dart` bằng bản rỗng, build, trả file về (kể cả khi fail
-hoặc Ctrl-C), rồi **soi lại binary** và fail nếu còn dấu vết `sb_publishable_`
-hoặc `.supabase.co`.
+hoặc Ctrl-C), rồi **soi lại binary** bằng [`tools/scan-secrets.sh`](tools/scan-secrets.sh)
+và fail nếu tìm thấy key/URL thật. CI dùng đúng script đó — logic soi để một chỗ
+vì trước đây regex bị copy ra 3 nơi rồi lệch nhau (CI fail, script local báo
+"sạch" trên đúng cùng một binary).
+
+Soi tay file nào cũng được:
+
+```bash
+bash tools/scan-secrets.sh <file>...   # exit 0 = sạch, 1 = có dấu vết
+```
+
+Nó chỉ khớp **giá trị thật** — `sb_publishable_`/`sb_secret_` kèm >=10 ký tự, và
+>=16 ký tự `[a-z0-9]` liền trước `.supabase.co` (project ref thật dài 20). Nhờ vậy
+placeholder `https://<project-ref>.supabase.co` trong hintText của form không bị
+tính là rò.
 
 ## Build bản phát hành
 
