@@ -117,6 +117,31 @@ jobs:
       - name: Stub lib/env.dart
         run: cp lib/env.example.dart lib/env.dart
 
+      # Dựng lại keystore + key.properties từ Secrets. Bắt buộc: auto-update
+      # cài đè APK, Android chỉ cho cài đè khi chữ ký khớp bản đang cài — ký
+      # bằng debug key (debug.keystore sinh mới mỗi runner) là mỗi release một
+      # chữ ký khác nhau ⇒ INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+      # Thiếu secret thì fail luôn ở đây, đừng để lọt ra release ký debug.
+      - name: Dựng keystore ký release
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_B64" ]]; then
+            echo "Thiếu secret ANDROID_KEYSTORE_BASE64 — xem mục Cập nhật trong README." >&2
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > android/bfstickytask-release.jks
+          # Không echo mật khẩu: ghi bằng printf vào file, runner sẽ bị xoá sau job.
+          {
+            printf 'storeFile=bfstickytask-release.jks\n'
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+          } > android/key.properties
+
       # Flutter 3.47.2 không build được Android cho BẤT KỲ project nào — bug SDK
       # ở :gradle:compileGroovy (flutter#173943, flutter#176077). Script này vá
       # SDK trong runner; nó idempotent và tự báo nếu upstream đã sửa.
@@ -125,6 +150,36 @@ jobs:
 
       - run: flutter pub get
       - run: flutter build apk --release --split-per-abi
+
+      # Chốt lại: APK phải ký bằng đúng key release, không phải debug key. Sai
+      # key là user không cài đè được bản mới — thà fail CI còn hơn phát hành.
+      #
+      # Dùng apksigner chứ không dùng `keytool -printcert -jarfile`: minSdk của
+      # Flutter đã lên 24 nên AGP bỏ chữ ký v1 (JAR), keytool đọc đúng v1 thôi
+      # và sẽ báo "not a signed jar file" dù APK ký đủ v2/v3.
+      - name: Verify APK ký đúng key release
+        env:
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          [[ -n "$apksigner" ]] || { echo "không thấy apksigner trong build-tools" >&2; exit 1; }
+
+          # Cả hai bên quy về hex thường, không dấu hai chấm, để so trực tiếp:
+          # keytool in `7F:7F:26:…`, apksigner in `7f7f26…`.
+          want=$(keytool -list -v -keystore android/bfstickytask-release.jks \
+                   -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" \
+                 | grep -m1 'SHA256:' | sed 's/.*SHA256: *//' | tr -d ':' | tr 'A-F' 'a-f')
+          [[ -n "$want" ]] || { echo "không đọc được fingerprint của keystore" >&2; exit 1; }
+          echo "keystore  $want"
+
+          for apk in build/app/outputs/flutter-apk/*-release.apk; do
+            got=$("$apksigner" verify --print-certs "$apk" \
+                  | grep -m1 'SHA-256 digest' | sed 's/.*: *//' | tr 'A-F' 'a-f')
+            echo "$(basename "$apk")  $got"
+            [[ "$got" == "$want" ]] || { echo "APK ký sai key!" >&2; exit 1; }
+          done
 
       - name: Verify không rò URL/key
         run: |

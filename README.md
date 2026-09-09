@@ -21,6 +21,10 @@ phiên chạy: mở lại app là về "Tất cả", để không bao giờ mở
 hiểu vì sao. Mốc so sánh là `doneAt` quy về **giờ địa phương** (note lưu UTC), nên "hôm nay"
 đúng theo lịch của máy đang xem.
 
+**Cập nhật là tự động**: app kiểm bản mới trên GitHub Releases khi mở, bấm "Cập nhật ngay" là
+nó tự tải, tự cài đè và tự mở lại — không mở browser, không unzip, không kéo thả. Áp cho cả
+macOS, Windows và Android; chi tiết + giới hạn của từng nền tảng ở [mục Cập nhật](#cập-nhật).
+
 Giao diện có 3 mode — **tự động theo hệ thống / sáng / tối** — đổi bằng nút hình mặt trời/mặt trăng
 trên title bar (xoay vòng `system → light → dark`), có trên cả desktop và Android, và được nhớ lại
 sau khi tắt app. Bảng màu tối giữ tông nâu ấm để vẫn ra dáng giấy note.
@@ -84,14 +88,14 @@ tự về đúng trạng thái. Logic chung ở
 đường khác hẳn:
 
 **macOS — `SMAppService.mainApp`** ([`macos/Runner/LaunchAtLogin.swift`](macos/Runner/LaunchAtLogin.swift)).
-App chạy **sandbox** nên **không ghi được `~/Library/LaunchAgents`** — cách mà hầu hết plugin
-Flutter dùng, và trong sandbox nó *chết câm*: ghi file báo thành công vào container ảo, khởi
-động lại thì không có gì chạy. `SMAppService` là API Apple làm riêng cho login item của app
-sandbox, không cần entitlement thêm.
+Không ghi `~/Library/LaunchAgents` như hầu hết plugin Flutter: `SMAppService` là API login
+item hiện tại của Apple, đăng ký theo **bundle id** nên login item sống sót qua việc app tự
+cập nhật (thay cả `.app`, xem [mục Cập nhật](#cập-nhật)) — plist trong LaunchAgents thì trỏ
+đường dẫn cứng. User cũng quản lý được ngay trong System Settings → Login Items.
 
-- Cần **macOS 13+**. Deployment target của project là 12.0 và trong sandbox không còn đường
-  nào khác cho macOS 12 → ở đó native trả `supported = false` và **nút tự ẩn**, chứ không
-  hiện một nút bấm không lên.
+- Cần **macOS 13+**. Deployment target của project là 12.0 → ở macOS 12 native trả
+  `supported = false` và **nút tự ẩn**, chứ không hiện một nút bấm không lên. (App đã bỏ
+  app-sandbox nên giờ viết LaunchAgents cho macOS 12 là được — chưa làm vì chưa có ai dùng.)
 - Status `.requiresApproval` (user từng từ chối, hoặc macOS còn chờ duyệt) vẫn tính là "đang
   bật" nhưng nút chuyển **màu đỏ** + tooltip chỉ đường
   **System Settings → General → Login Items**. Không nói ra thì user thấy nút sáng mà máy
@@ -179,6 +183,25 @@ App tự kiểm bản mới **khi mở** và hiện popup nếu có, ngoài ra c
 trên title bar (icon mũi tên vòng; đổi thành icon tải xuống + màu accent khi
 đang có bản mới chờ).
 
+Bấm **"Cập nhật ngay"** là app **tự tải và tự cài** — không mở browser, không
+bắt ai unzip hay kéo thả. macOS/Windows tự động hết, kể cả việc mở lại app;
+Android thì hệ thống có thể chen một dialog xác nhận (xem bên dưới — đó là giới
+hạn của Android, không phải thiếu sót ở đây). Mở trang release chỉ còn là
+**đường lùi**: nền tảng không tự cài được, release không có asset cho máy này,
+hoặc cài lỗi.
+
+Việc chia làm hai nửa, hai file:
+
+| | file | việc |
+|---|---|---|
+| *biết* có bản mới | [`data/update_service.dart`](lib/data/update_service.dart) | gọi GitHub API, so version, nhớ version đã bỏ qua |
+| *tải và cài* | [`data/updater.dart`](lib/data/updater.dart) + [`data/update_installer.dart`](lib/data/update_installer.dart) | tải có progress, đối chiếu sha256, cài theo từng nền tảng |
+
+Nửa đầu chạy mỗi lần mở app nên phải nhẹ và im lặng khi lỗi; nửa sau chỉ chạy
+khi user bấm và là phần duy nhất động tới file trên máy.
+
+### Kiểm bản mới
+
 Nguồn là **GitHub Releases** của chính repo này:
 
 ```
@@ -191,17 +214,133 @@ GET https://api.github.com/repos/blackf-app/BF-StickyTask/releases/latest
 - **So version** lấy từ `pubspec.yaml` (qua `package_info_plus`) với `tag_name`
   của release. Tag `v1.0.1`, build metadata `1.0.1+7`, pre-release `1.0.1-beta`
   đều quy về `1.0.1` rồi so từng thành phần số.
-- **Không tự tải, không tự cài.** Popup hiện release notes + nút mở trang
-  release trên browser để tự tải bản đúng máy. Tự ghi đè app đang chạy là việc
-  khác hẳn: macOS chạy sandbox không tự thay `.app` được, Windows cần helper
-  process riêng.
 - **"Bỏ qua bản này"** ghi version vào SharedPreferences (`update_skipped_version`)
   nên lần mở app sau không popup lại — nhưng bấm nút kiểm tay thì vẫn báo.
 - **Lỗi mạng lúc mở app thì im lặng**, không ai muốn vừa mở app đã ăn popup lỗi.
   Trạng thái vẫn nằm trong `UpdateService` để popup hiện khi user tự mở.
 
+### Chọn asset
+
+App tự chọn file trong `assets[]` của release theo nền tảng đang chạy. Tên file
+do [`.github/workflows/release.yml`](.github/workflows/release.yml) đặt nên hai
+bên phải khớp — [`test/update_installer_test.dart`](test/update_installer_test.dart)
+chốt đúng chỗ này bằng bộ tên thật.
+
+| nền tảng | asset |
+|---|---|
+| macOS | `BF-StickyTask-macos.zip` |
+| Windows | `BF-StickyTask-windows.zip` |
+| Android | `app-<abi>-release.apk` theo `Abi.current()` của `dart:ffi`, rơi về APK universal nếu không có |
+
+ABI khớp theo **ranh giới token**, không phải `contains`:
+`'app-x86_64-release.apk'.contains('x86')` là `true`, nên máy 32-bit sẽ nhận APK
+64-bit rồi cài xong crash ngay lúc mở.
+
+### Kiểm file tải về
+
+Đối chiếu kích thước và `digest` (`sha256:…`) mà GitHub API trả về, băm theo
+stream để không nạp cả 40MB vào RAM. Đây là chống **tải lỗi/thiếu**, *không*
+phải chống repo bị chiếm: `digest` cũng đến từ chính GitHub. Muốn chống cái sau
+thì phải ký asset bằng key riêng (kiểu Sparkle) và nhúng public key vào app —
+chưa làm.
+
+### macOS — thay `.app` đang chạy
+
+**Phải bỏ app-sandbox mới làm được.** App sandbox chỉ cho ghi trong container
+của chính nó, và process con thừa hưởng sandbox của cha, nên không có đường nào
+để một app sandboxed thay `.app` của chính mình (Sparkle cũng không hỗ trợ app
+sandbox nếu không kèm XPC helper riêng). App phát hành qua GitHub, không lên Mac
+App Store, nên sandbox không bắt buộc →
+[`macos/Runner/Release.entitlements`](macos/Runner/Release.entitlements) đã bỏ nó.
+
+**Hệ quả đã xử lý:** đường dẫn dữ liệu đổi chỗ, xem
+[mục Đổi tên & bundle id](#đổi-tên--bundle-id). Bật lại sandbox là vừa làm chết
+auto-update, vừa làm user "mất" note vì app đọc lại đúng container cũ đã không
+được ghi tiếp.
+
+Luồng: tải zip → `ditto -x -k` giải nén ra thư mục tạm (dùng `ditto` chứ không
+dùng `package:archive` — zip của `.app` có symlink và bit exec mà `archive` làm
+mất) → sinh `install.sh` → chạy **detached** → app flush note rồi `exit(0)` →
+script chờ PID chết, đổi chỗ bundle, `open -n` bản mới.
+
+- **Đổi chỗ bằng `mv`, không `ditto` trực tiếp lên bundle cũ.** `ditto` vào
+  `X.app.bfst-new` rồi rename (rename cùng volume là atomic). Ghi trực tiếp mà
+  lỗi nửa đường thì bundle cũ đã trộn file của hai version: không mở được mà
+  cũng không rollback được.
+- **Mọi nhánh lỗi đều `open` lại app.** App đã thoát rồi, để user không còn app
+  nào để mở là kết cục tệ nhất — kể cả nhánh "bản cũ đã dọn đi mà bản mới chưa
+  vào chỗ" cũng trả bản cũ về trước khi mở.
+- **App Translocation**: bundle chưa ký chạy từ `~/Downloads` bị macOS gắn vào
+  một mount chỉ-đọc ở `/private/var/folders/…/AppTranslocation/`. Ghi đè chỗ đó
+  là vô nghĩa (mount biến mất khi app thoát) → cài hẳn vào `/Applications` rồi
+  mở bản đó.
+- **Thư mục cài không ghi được** (app do root đặt vào `/Applications`): xin
+  quyền admin bằng `osascript … with administrator privileges` **lúc app còn
+  sống**, để hiện được cửa sổ nhập mật khẩu. Đây là trường hợp duy nhất còn thao
+  tác tay trên macOS. Script chạy dưới root thì `open` phải qua `launchctl asuser`
+  + `sudo -u` — `open` của root mở app trong session của root, user không thấy
+  gì; và `chown` trả lại quyền sở hữu để lần cập nhật sau khỏi nhập mật khẩu nữa.
+- **Không bị Gatekeeper**: tải bằng HTTP trong app nên file **không** có cờ
+  `com.apple.quarantine` (khác hẳn tải bằng browser) → bản mới mở thẳng, không
+  còn "app bị hỏng". Tự cập nhật thực tế êm hơn cài tay.
+
+### Windows — ghi đè thư mục cài
+
+Bản phát hành Windows là **zip portable** (nén cả `build/windows/x64/runner/Release/`),
+không phải installer, nên "cài" đúng nghĩa là copy đè lên thư mục đang chạy.
+exe/dll đang chạy bị OS lock nên vẫn theo khuôn "chờ process chết": giải nén
+bằng `package:archive` (bundle Windows chỉ có file thường, không symlink) → sinh
+`.ps1` → `Process.start(..., detached)` → `Wait-Process` → `robocopy` →
+`Start-Process` bản mới.
+
+- **Cố ý KHÔNG dùng `robocopy /PURGE`.** `/PURGE` xoá mọi file trong đích không
+  có trong nguồn; zip portable thì user hay giải nén thẳng ra Desktop hoặc gốc ổ
+  đĩa, và ở đó `/PURGE` là xoá sạch file của họ. File cũ sót lại là vô hại —
+  runner Flutter nạp `data\` và các DLL theo đúng tên. `/IS /IT` để robocopy
+  không bỏ qua file trùng kích thước + timestamp.
+- **`C:\Program Files…`**: script tự nâng quyền bằng `Start-Process -Verb RunAs`
+  → **một** cửa sổ UAC. Windows không cho ghi vào đó mà không có quyền admin. Vì
+  bản phát hành là zip portable nên phần lớn user để ở chỗ ghi được và không gặp
+  UAC lần nào.
+- **Chạy elevated thì mở lại app qua `explorer.exe`.** `Start-Process` trực tiếp
+  sẽ mở app *cũng* dưới quyền admin, app ghi prefs vào profile của admin thay vì
+  của user; `explorer.exe` chạy sẵn dưới quyền user đang đăng nhập nên nhờ nó mở
+  là hạ quyền về đúng chỗ.
+- Registry "mở khi khởi động" trỏ đường dẫn exe — thay in-place nên đường dẫn
+  không đổi, không phải sửa gì.
+
+### Android — `PackageInstaller`
+
+**Không thể tự động 100%, và đây là giới hạn của Android.** Mọi lần cài ngoài
+store đều phải qua dialog xác nhận của hệ thống; chỉ device-owner (MDM) hoặc app
+có chữ ký hệ thống mới bỏ được. Mức tự động, theo thứ tự tốt dần
+([`ApkInstaller.kt`](android/app/src/main/kotlin/com/blackface/bfstickytask/ApkInstaller.kt)):
+
+1. **Android 12+ và app đã là "installer of record"** của chính nó (bản đang
+   chạy do app này cài ở lần cập nhật trước):
+   `setRequireUserAction(USER_ACTION_NOT_REQUIRED)` + quyền
+   `UPDATE_PACKAGES_WITHOUT_USER_ACTION` cho phép cài **im lặng, không dialog
+   nào**. Tức là từ lần cập nhật *thứ hai* trở đi là hoàn toàn tự động.
+2. Không đủ điều kiện trên (bản đầu cài tay từ browser, hoặc Android 11 trở
+   xuống): hệ thống hiện dialog "Cập nhật ứng dụng?" — user bấm **một** lần.
+   Không cần tự kiểm điều kiện, hệ thống lặng lẽ rơi về đây.
+3. Chưa được cấp "cài ứng dụng không rõ nguồn": native mở đúng trang cài đặt của
+   app này, bật xong bấm Cập nhật lại. Chỉ phải làm **một lần**.
+
+Cài xong, `InstallResultReceiver` mở lại app. Receiver khai trong manifest chứ
+không `registerReceiver()` trong code, vì `STATUS_SUCCESS` về **sau** khi app đã
+bị kill để thay APK — hệ thống phải cold-start được receiver. Việc mở lại là
+**best-effort**: từ Android 10, app ở background bị chặn mở activity; bị chặn thì
+cùng lắm user tự mở app, bản mới đã cài xong rồi.
+
+**Điều kiện tiên quyết: APK phải ký cùng key với bản đang cài**, không thì hệ
+thống từ chối (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) — xem
+[mục ký release Android](#android-ký-release-bằng-key-cố-định).
+
+### Ra bản mới
+
 `/releases/latest` bỏ qua draft và pre-release, nên muốn user thấy bản mới thì
-release phải được publish thật. Cách ra bản mới:
+release phải được publish thật.
 
 ```bash
 # 1. nâng version trong pubspec.yaml, ví dụ: version: 1.0.1+2
@@ -212,7 +351,7 @@ git tag v1.0.1 && git push origin v1.0.1
 Tag phải khớp version trong `pubspec.yaml`, không thì máy đang chạy bản cũ so ra
 sai. Android 11+ cần khối `<queries>` với `android.intent.action.VIEW` + scheme
 `https` trong `AndroidManifest.xml` — thiếu là `url_launcher` không thấy browser
-nào và nút "Tải bản mới" không mở được trang.
+nào và đường lùi "Mở trang tải" không mở được trang.
 
 ## Cấu trúc
 
@@ -226,7 +365,10 @@ lib/
   data/sync_config.dart        SyncConfig (URL + publishable key) + đọc/ghi prefs
   data/sync_service.dart       push/pull/realtime (không có auth)
   data/update_service.dart     kiểm bản mới trên GitHub Releases + so version
+  data/updater.dart            tải bản mới (progress, huỷ) + verify sha256
+  data/update_installer.dart   cài theo từng nền tảng: script macOS/Windows, PackageInstaller
   app/desktop_integration.dart cửa sổ, always-on-top, tray, hotkey, nhớ vị trí
+  app/prefs_migration.dart     kéo prefs từ container sandbox cũ (chạy đầu main())
   app/launch_at_startup.dart   mở app khi khởi động máy (macOS SMAppService / Windows registry)
   app/history_filter.dart      bộ lọc ngày của tab History (preset + khoảng tự chọn)
   app/settings_controller.dart themeMode (system/light/dark), lưu SharedPreferences
@@ -234,12 +376,13 @@ lib/
   ui/home_page.dart            title bar + 2 tab + ô thêm việc
   ui/note_tile.dart            dòng note (Current / History) + editor inline
   ui/sync_dialog.dart          popup trạng thái đồng bộ + form URL/key
-  ui/update_dialog.dart        popup cập nhật: version, release notes, nút tải
+  ui/update_dialog.dart        popup cập nhật: version, release notes, progress tải/cài
   ui/confirm_dialog.dart       confirmDelete() — popup xác nhận cho mọi thao tác xoá
 macos/Runner/LaunchAtLogin.swift  phía native của "mở khi khởi động máy" (SMAppService)
+android/app/src/main/kotlin/…/ApkInstaller.kt  cài APK bản mới qua PackageInstaller
 supabase/schema.sql            bảng + RLS + realtime
 tools/patch-flutter-sdk.sh     vá Flutter SDK để build được Android (xem mục Build)
-tools/migrate-container.sh     chuyển notes.json + prefs sang container của bundle id mới
+tools/migrate-container.sh     vớt dữ liệu từ container sandbox của bundle id CŨ (xem mục Đổi tên)
 tools/check-backend.sh         soi backend: bảng, schema đã migrate chưa, quyền ghi
 tools/build-release.sh         build release KHÔNG nhúng env.dart + soi lại binary
 tools/scan-secrets.sh          soi binary xem có nhúng Supabase URL/key thật không
@@ -258,17 +401,25 @@ Project từng tên là `stickytask` / `vn.easygoing.stickytask`. Bản hiện t
 | Bundle id / applicationId | `com.blackface.bfstickytask` |
 | Exe Windows | `bf_stickytask.exe` (`BINARY_NAME` trong `windows/CMakeLists.txt`) |
 
-App macOS chạy **sandbox**, nên `getApplicationSupportDirectory()` nằm trong container của
-bundle id. Đổi bundle id ⇒ đổi container ⇒ app mới **không có quyền** đọc container cũ, migration
-không thể làm trong Dart. Dùng script ngoài sandbox:
+App macOS **không còn chạy sandbox** (bỏ đi để tự cập nhật được — xem
+[mục Cập nhật](#cập-nhật)), nên `getApplicationSupportDirectory()` trả
+`~/Library/Application Support/<bundle id>` và prefs nằm ở
+`~/Library/Preferences/<bundle id>.plist`. Đổi bundle id ⇒ hai đường dẫn đó đổi theo, nhưng
+app đọc/ghi được cả hai nên **migration làm trong Dart**, tự động và idempotent — xem
+`LocalStore._migrateFromSandboxContainer` và
+[`lib/app/prefs_migration.dart`](lib/app/prefs_migration.dart).
+
+[`tools/migrate-container.sh`](tools/migrate-container.sh) chỉ còn cần cho **một** trường hợp:
+dữ liệu còn nằm trong container sandbox của bundle id **cũ** (`vn.easygoing.stickytask`) từ
+thời app còn sandbox — app không tự dò id cũ.
 
 ```bash
-bash tools/migrate-container.sh          # copy notes.json + prefs sang container mới
+bash tools/migrate-container.sh          # copy notes.json + prefs sang container id mới
 bash tools/migrate-container.sh --force  # ghi đè nếu đích đã có dữ liệu
 ```
 
-Container cũ (`~/Library/Containers/vn.easygoing.stickytask`) không bị xoá — giữ làm backup,
-tự xoá tay khi đã chắc app mới chạy đúng.
+Chạy nó **trước** khi mở bản app mới, rồi app tự kéo tiếp sang `~/Library/Application Support`.
+Container cũ không bị xoá — giữ làm backup, tự xoá tay khi đã chắc app mới chạy đúng.
 
 ## Dọn tombstone trên server (pg_cron)
 
@@ -345,7 +496,47 @@ Bản macOS không ký/notarize (dùng cá nhân). Copy `.app` sang máy khác m
 xattr -dr com.apple.quarantine /Applications/BF-StickyTask.app
 ```
 
-### Android: 2 thứ phải làm trước
+Chỉ cần cho lần **cài tay đầu tiên**. Các bản sau app tự tải bằng HTTP nên file không có cờ
+quarantine, và script cài còn `xattr -dr` lại cho chắc — tự cập nhật không gặp Gatekeeper.
+
+### Android: ký release bằng key cố định
+
+**Bắt buộc cho auto-update.** Android chỉ cho cài đè khi APK mới ký **cùng key**
+với bản đang cài. Trước đây release ký bằng debug key, mà `debug.keystore` được
+sinh mới trên mỗi runner CI ⇒ mỗi release một chữ ký khác nhau ⇒ cài đè fail
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` (kể cả cài tay).
+
+Keystore ở `android/bfstickytask-release.jks`, mật khẩu ở `android/key.properties`
+— **cả hai đều gitignore**, và bản sao cho CI nằm ở GitHub Secrets:
+
+| secret | nội dung |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | `base64 -i android/bfstickytask-release.jks` (một dòng) |
+| `ANDROID_KEYSTORE_PASSWORD` | mật khẩu keystore |
+| `ANDROID_KEY_ALIAS` | `bfstickytask` |
+| `ANDROID_KEY_PASSWORD` | mật khẩu key |
+
+`release.yml` dựng lại keystore + `key.properties` từ 4 secret đó trước khi build,
+rồi **đối chiếu fingerprint** của từng APK với keystore bằng `apksigner` — sai key
+là fail CI, không để lọt ra release. (Dùng `apksigner` chứ không
+`keytool -printcert -jarfile`: minSdk của Flutter đã lên 24 nên AGP bỏ chữ ký v1
+và keytool đọc đúng v1.)
+
+Máy mới / mất secret thì sinh lại từ keystore đang có:
+
+```bash
+base64 -i android/bfstickytask-release.jks | tr -d '\n' \
+  | gh secret set ANDROID_KEYSTORE_BASE64 --repo blackf-app/BF-StickyTask
+```
+
+> ⚠️ **Mất keystore = vĩnh viễn không ra được bản update Android nữa.** User phải
+> xoá app cài lại từ đầu (mất note local chưa đồng bộ). Backup file `.jks` +
+> mật khẩu ra ngoài máy này.
+
+Không có `key.properties` (máy chưa setup) thì Gradle rơi về debug key:
+`flutter run --release` vẫn chạy để test, nhưng **đừng phát hành bản đó**.
+
+### Android: 2 thứ phải làm trước khi build
 
 **1. JDK.** Cần JDK 17+ cho Gradle. Máy này đã cài Temurin 21 ở `~/development/jdk/jdk-21.0.12.1+1`
 và `~/.zshrc` đã export `JAVA_HOME`. Máy mới thì cài JDK rồi `flutter config --jdk-dir=<path>`.
@@ -422,10 +613,28 @@ Hai thứ dễ hiểu lầm khi kiểm tra:
 ```bash
 flutter test     # logic repo: add / done / restore / reorder / tombstone / merge
                  # so version + trạng thái kiểm cập nhật (không gọi mạng thật)
+                 # tải/verify/cài bản mới + chọn asset theo nền tảng & ABI
+                 # cú pháp script cài macOS (sh -n) + nội dung script Windows
                  # popup xác nhận của mọi thao tác xoá
                  # bộ lọc ngày của History (mốc UTC → giờ địa phương) + "Xoá hết" khi đang lọc
                  # trạng thái mở-khi-khởi-động (channel macOS bị giả lập, không đụng OS)
 ```
 
-`UpdateService` nhận `fetcher` để test không đi mạng — test widget nào dựng
-`HomePage` cũng phải truyền fetcher giả, vì `HomePage` kiểm bản mới ngay khi mở.
+Ba chỗ đáng biết trong test của phần cập nhật:
+
+- `UpdateService` nhận `fetcher` để test không đi mạng — test widget nào dựng
+  `HomePage` cũng phải truyền fetcher giả, vì `HomePage` kiểm bản mới ngay khi mở.
+- **`Updater` test bằng `test()` chứ không `testWidgets()`.** `testWidgets` chạy
+  trong `FakeAsync`, mà future của `dart:io` (tạo file tạm, ghi file) *không bao
+  giờ complete* trong đó — download thật sẽ treo giữa đường. Phần UI test riêng ở
+  [`test/update_dialog_test.dart`](test/update_dialog_test.dart) với một `Updater`
+  stub đặt sẵn trạng thái.
+- **Script cài được kiểm bằng `sh -n`** ([`test/update_installer_test.dart`](test/update_installer_test.dart)).
+  Script chạy *sau* khi app đã thoát, nên một lỗi cú pháp ở đó nghĩa là app biến
+  mất và không bao giờ mở lại — không có chỗ nào báo lỗi cho user. Cũng vì thế có
+  test chốt rằng script không dùng line-continuation của shell: dấu chéo ngược
+  cuối dòng nằm trong string literal của Dart sẽ bị chính Dart ăn mất.
+
+Progress bar vô định (`LinearProgressIndicator` không có `value`) chạy mãi, nên
+test nào có nó trên màn hình phải dùng `pump()` chứ không `pumpAndSettle()` —
+`pumpAndSettle` sẽ timeout.

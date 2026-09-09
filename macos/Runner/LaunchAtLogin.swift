@@ -5,15 +5,17 @@ import ServiceManagement
 /// "Mở app khi khởi động máy" cho macOS — phía native của
 /// `lib/app/launch_at_startup.dart`.
 ///
-/// App chạy **sandbox** (xem Release.entitlements) nên KHÔNG ghi được vào
-/// `~/Library/LaunchAgents` — đó là cách phần lớn plugin Flutter làm, và trong
-/// sandbox nó chết câm: ghi file báo thành công vào container ảo, máy khởi
-/// động lại thì không có gì chạy. Đường hợp lệ duy nhất là `SMAppService`,
-/// Apple làm riêng cho login item của app sandbox.
+/// Dùng `SMAppService` chứ không ghi `~/Library/LaunchAgents` như phần lớn
+/// plugin Flutter: SMAppService là API login item hiện tại của Apple, đăng ký
+/// theo **bundle id** nên login item sống sót qua việc app tự cập nhật (ghi đè
+/// cả `.app`, xem `lib/data/update_installer.dart`), còn plist trong
+/// LaunchAgents thì trỏ đường dẫn cứng và user quản lý được ngay trong
+/// **System Settings → General → Login Items**.
 ///
-/// `SMAppService` cần **macOS 13+**. Deployment target của project là 12.0 và
-/// trong sandbox không còn API nào khác cho macOS 12, nên ở đó trả
-/// `supported = false` và UI tự ẩn nút thay vì hiện một nút bấm không lên.
+/// `SMAppService` cần **macOS 13+**; deployment target của project là 12.0 nên
+/// ở macOS 12 trả `supported = false` và UI tự ẩn nút thay vì hiện một nút bấm
+/// không lên. (App đã bỏ app-sandbox để tự cập nhật được, nên nếu cần đỡ macOS
+/// 12 thì giờ viết LaunchAgents được — chưa làm vì chưa có ai dùng.)
 enum LaunchAtLogin {
   /// Trùng với `LaunchAtStartup.channel` bên Dart.
   static let channelName = "bf_stickytask/launch_at_startup"

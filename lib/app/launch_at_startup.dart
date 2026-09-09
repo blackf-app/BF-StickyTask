@@ -41,10 +41,10 @@ class LaunchAtStartupState {
 /// Hai nền tảng đi hai đường hoàn toàn khác nhau:
 ///
 /// - **macOS**: `SMAppService.mainApp` qua method channel (xem
-///   `macos/Runner/LaunchAtLogin.swift`). App chạy sandbox nên KHÔNG ghi được
-///   `~/Library/LaunchAgents` — cách mà phần lớn plugin Flutter dùng và chết
-///   câm ở đây. SMAppService cần **macOS 13+**; macOS 12 (deployment target)
-///   không có đường nào khác trong sandbox nên báo `supported = false`.
+///   `macos/Runner/LaunchAtLogin.swift`). SMAppService đăng ký theo bundle id
+///   nên login item sống sót qua việc app tự cập nhật (ghi đè cả `.app`), khác
+///   plist trong `~/Library/LaunchAgents` trỏ đường dẫn cứng. Cần **macOS
+///   13+**; macOS 12 (deployment target) báo `supported = false`.
 /// - **Windows**: ghi thẳng registry `…\CurrentVersion\Run` bằng Dart, không
 ///   cần code C++ trong runner.
 ///

@@ -12,6 +12,48 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// `tools/scan-secrets.sh` tồn tại để chặn.
 const String kUpdateRepo = 'blackf-app/BF-StickyTask';
 
+/// Một file đính kèm release — bản build cho một nền tảng.
+@immutable
+class ReleaseAsset {
+  const ReleaseAsset({
+    required this.name,
+    required this.url,
+    required this.size,
+    this.sha256,
+  });
+
+  /// Tên file: `BF-StickyTask-macos.zip`, `app-arm64-v8a-release.apk`…
+  final String name;
+
+  /// `browser_download_url` — tải trực tiếp, không cần token với repo public.
+  final String url;
+
+  /// Byte. `0` nếu GitHub không trả (không chặn tải, chỉ mất progress %).
+  final int size;
+
+  /// Hex thường, lấy từ field `digest` (`sha256:…`). `null` nếu release được
+  /// tạo trước khi GitHub thêm field này.
+  final String? sha256;
+
+  static ReleaseAsset? fromJson(Map<String, dynamic> json) {
+    final name = (json['name'] as String? ?? '').trim();
+    final url = (json['browser_download_url'] as String? ?? '').trim();
+    if (name.isEmpty || url.isEmpty) return null;
+
+    // `digest` dạng `sha256:abcd…`. Thuật toán khác thì bỏ, đừng so bằng
+    // hàm băm sai — verify sẽ fail oan mọi lần tải.
+    final digest = (json['digest'] as String? ?? '').trim().toLowerCase();
+    final sha = digest.startsWith('sha256:') ? digest.substring(7) : null;
+
+    return ReleaseAsset(
+      name: name,
+      url: url,
+      size: (json['size'] as num?)?.toInt() ?? 0,
+      sha256: (sha != null && sha.isNotEmpty) ? sha : null,
+    );
+  }
+}
+
 /// Một bản release đọc từ GitHub.
 @immutable
 class AppRelease {
@@ -20,6 +62,7 @@ class AppRelease {
     required this.tag,
     required this.notes,
     required this.pageUrl,
+    this.assets = const [],
   });
 
   /// Đã bỏ tiền tố `v`: `1.0.1`.
@@ -31,8 +74,13 @@ class AppRelease {
   /// Body của release — có thể rỗng.
   final String notes;
 
-  /// `html_url` — trang release để tải asset.
+  /// `html_url` — trang release. Vẫn giữ làm đường lùi khi không tự cài được
+  /// (không có asset cho nền tảng này, hoặc cài lỗi).
   final String pageUrl;
+
+  /// File đính kèm, để tự tải + tự cài. Rỗng nghĩa là chỉ còn cách mở
+  /// [pageUrl].
+  final List<ReleaseAsset> assets;
 
   /// Trả `null` nếu JSON không có `tag_name` (không đủ dữ liệu để so version).
   static AppRelease? fromJson(Map<String, dynamic> json) {
@@ -45,6 +93,11 @@ class AppRelease {
       pageUrl: (json['html_url'] as String? ?? '').trim().isEmpty
           ? 'https://github.com/$kUpdateRepo/releases/latest'
           : json['html_url'] as String,
+      assets: ((json['assets'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ReleaseAsset.fromJson)
+          .whereType<ReleaseAsset>()
+          .toList(growable: false),
     );
   }
 }
@@ -106,9 +159,9 @@ typedef ReleaseFetcher = Future<AppRelease?> Function();
 
 /// Kiểm tra bản mới trên GitHub Releases.
 ///
-/// Không tự tải, không tự cài: chỉ so version rồi mở trang release trên
-/// browser. Tự cài đè lên app đang chạy là việc khác hẳn — macOS sandbox
-/// không tự ghi đè `.app` được, Windows cần helper process riêng.
+/// Chỉ lo phần *biết có bản mới*: so version, giữ trạng thái cho UI, nhớ
+/// version user đã bỏ qua. Phần *tải về và cài* nằm ở [Updater]
+/// (`lib/data/updater.dart`).
 class UpdateService extends ChangeNotifier {
   UpdateService({ReleaseFetcher? fetcher, String? currentVersion})
       : _fetcher = fetcher ?? fetchLatestRelease,

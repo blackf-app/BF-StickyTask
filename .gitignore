@@ -49,3 +49,10 @@ app.*.map.json
 
 # Cau hinh rieng cua may (chua key Supabase)
 lib/env.dart
+
+# Luoi an toan cho key ky Android: android/.gitignore da ignore key.properties
+# va **/*.jks, hai dong duoi chan truong hop keystore bi de lac ra ngoai
+# android/. Lot vao git la ai cung ky duoc app mao danh app nay -> Android cho
+# cai de len may user. Ban sao dung cho CI nam o GitHub Secrets.
+*.jks
+*.keystore

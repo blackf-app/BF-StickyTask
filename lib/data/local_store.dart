@@ -19,6 +19,9 @@ class LocalStore {
   static const String _fileName = 'notes.json';
   static const int _schemaVersion = 1;
 
+  /// Bundle id — dùng để dò container sandbox cũ trên macOS.
+  static const String _bundleId = 'com.blackface.bfstickytask';
+
   File? _cachedFile;
 
   Future<File> _file() async {
@@ -26,7 +29,48 @@ class LocalStore {
     if (cached != null) return cached;
     final dir = await getApplicationSupportDirectory();
     await dir.create(recursive: true);
-    return _cachedFile = File('${dir.path}${Platform.pathSeparator}$_fileName');
+    final file = File('${dir.path}${Platform.pathSeparator}$_fileName');
+    // Phải chạy TRƯỚC lần đọc đầu tiên, không thì app mở ra trống rỗng.
+    await _migrateFromSandboxContainer(file);
+    return _cachedFile = file;
+  }
+
+  /// macOS: kéo `notes.json` từ container sandbox cũ sang chỗ mới.
+  ///
+  /// App từng bật `com.apple.security.app-sandbox`, khi đó
+  /// `getApplicationSupportDirectory()` trả về đường dẫn TRONG container:
+  ///
+  ///   `~/Library/Containers/<id>/Data/Library/Application Support/<id>`
+  ///
+  /// Sandbox đã bị bỏ để app tự cập nhật được (xem
+  /// `macos/Runner/Release.entitlements`), nên hàm đó giờ trả về
+  /// `~/Library/Application Support/<id>` — chỗ khác hẳn. Không copy sang là
+  /// user nâng cấp xong mở app thấy sạch note.
+  ///
+  /// Idempotent: đích đã có `notes.json` thì không làm gì. Container cũ để
+  /// nguyên làm backup, không xoá. Lỗi thì im lặng bỏ qua — thà mở app ra
+  /// trống (dữ liệu vẫn còn trong container cũ, `tools/migrate-container.sh`
+  /// vớt lại được) còn hơn chết ở bootstrap.
+  Future<void> _migrateFromSandboxContainer(File target) async {
+    if (!Platform.isMacOS) return;
+    if (target.existsSync()) return;
+
+    final home = Platform.environment['HOME'];
+    if (home == null || home.isEmpty) return;
+
+    try {
+      final legacy = File(
+        '$home/Library/Containers/$_bundleId/Data/Library'
+        '/Application Support/$_bundleId/$_fileName',
+      );
+      if (!legacy.existsSync()) return;
+      // copy() ghi trực tiếp ra đích; đích vừa kiểm là chưa tồn tại nên không
+      // có nguy cơ đè lên dữ liệu mới hơn.
+      await legacy.copy(target.path);
+    } catch (_) {
+      // Đọc container cũ có thể bị TCC chặn trên macOS mới. Không cứu được thì
+      // thôi — save() sau đó vẫn ghi bình thường vào chỗ mới.
+    }
   }
 
   Future<String> filePath() async => (await _file()).path;

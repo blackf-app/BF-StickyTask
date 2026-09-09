@@ -1,18 +1,28 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app/desktop_integration.dart';
 import 'app/launch_at_startup.dart';
+import 'app/prefs_migration.dart';
 import 'app/settings_controller.dart';
 import 'app/theme.dart';
 import 'data/local_store.dart';
 import 'data/note_repo.dart';
 import 'data/sync_service.dart';
+import 'data/update_installer.dart';
 import 'data/update_service.dart';
+import 'data/updater.dart';
 import 'ui/home_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Phải là việc ĐẦU TIÊN: app đã bỏ sandbox macOS để tự cập nhật được, nên
+  // prefs đổi chỗ (~/Library/Containers/… → ~/Library/Preferences). Chạy sau
+  // setUpWindow() là cửa sổ đã đọc vị trí cũ trước khi có dữ liệu.
+  await PrefsMigration.run();
 
   // Cửa sổ phải dựng xong trước runApp để không bị nháy khung mặc định.
   await DesktopIntegration.instance.setUpWindow();
@@ -34,12 +44,24 @@ Future<void> main() async {
   final update = UpdateService();
   await update.load();
 
+  // Tách khỏi UpdateService: cái kia chỉ *biết* có bản mới, cái này *tải và
+  // cài*. onQuit dựng ở đây vì chỉ chỗ này giữ `repo` — desktop phải thoát app
+  // cho script bên ngoài ghi đè, mà thoát trước khi flush là mất note vừa gõ.
+  final updater = Updater(
+    installer: UpdateInstaller.forCurrentPlatform(),
+    onQuit: () async {
+      await repo.flush();
+      exit(0);
+    },
+  );
+
   runApp(
     BfStickyTaskApp(
       repo: repo,
       sync: SyncService(repo),
       settings: settings,
       update: update,
+      updater: updater,
     ),
   );
 }
@@ -51,12 +73,14 @@ class BfStickyTaskApp extends StatefulWidget {
     required this.sync,
     required this.settings,
     required this.update,
+    required this.updater,
   });
 
   final NoteRepo repo;
   final SyncService sync;
   final SettingsController settings;
   final UpdateService update;
+  final Updater updater;
 
   @override
   State<BfStickyTaskApp> createState() => _BfStickyTaskAppState();
@@ -119,6 +143,7 @@ class _BfStickyTaskAppState extends State<BfStickyTaskApp>
             sync: widget.sync,
             settings: widget.settings,
             update: widget.update,
+            updater: widget.updater,
           ),
         ),
       ),

@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# Chuyển dữ liệu local sang container của bundle id mới (macOS).
+# Chuyển dữ liệu local giữa hai container sandbox (macOS) — CHỈ dùng khi ĐỔI
+# BUNDLE ID.
 #
-# Vì sao phải là script ngoài app: app macOS chạy sandbox
-# (macos/Runner/*.entitlements → com.apple.security.app-sandbox), nên
-# `getApplicationSupportDirectory()` luôn nằm trong container CỦA CHÍNH NÓ.
-# Bundle id đổi ⇒ container đổi ⇒ app mới KHÔNG có quyền đọc container cũ.
-# Migration vì thế không làm được trong Dart, phải chạy ngoài sandbox.
+# ĐỌC TRƯỚC: app **không còn chạy sandbox** (bỏ đi để tự cập nhật được, xem
+# macos/Runner/Release.entitlements), nên đường dẫn dữ liệu bây giờ là
+# ~/Library/Application Support/<id> chứ không nằm trong container nữa.
+# Việc kéo dữ liệu từ container cũ sang chỗ mới đã làm TRONG APP, tự động và
+# idempotent — xem `LocalStore._migrateFromSandboxContainer`
+# (lib/data/local_store.dart) và `PrefsMigration` (lib/app/prefs_migration.dart).
+#
+# Script này còn giữ cho đúng một việc: bundle id đổi (vn.easygoing.stickytask →
+# com.blackface.bfstickytask) từ thời còn sandbox, khi đó dữ liệu nằm trong
+# container của id CŨ mà app không tự dò. Chạy nó TRƯỚC khi mở bản app mới, rồi
+# app sẽ tự kéo tiếp sang ~/Library/Application Support.
 #
 # Idempotent: đã có notes.json ở đích thì không ghi đè (trừ khi --force).
 set -euo pipefail

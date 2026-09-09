@@ -10,6 +10,7 @@ import '../app/theme.dart';
 import '../data/note_repo.dart';
 import '../data/sync_service.dart';
 import '../data/update_service.dart';
+import '../data/updater.dart';
 import '../models/note.dart';
 import 'confirm_dialog.dart';
 import 'note_tile.dart';
@@ -23,12 +24,14 @@ class HomePage extends StatefulWidget {
     required this.sync,
     required this.settings,
     required this.update,
+    required this.updater,
   });
 
   final NoteRepo repo;
   final SyncService sync;
   final SettingsController settings;
   final UpdateService update;
+  final Updater updater;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -60,7 +63,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _checkUpdateOnStartup() async {
     final release = await widget.update.checkOnStartup();
     if (release == null || !mounted) return;
-    await showUpdateDialog(context, widget.update);
+    await showUpdateDialog(context, widget.update, widget.updater);
   }
 
   @override
@@ -244,8 +247,12 @@ class _HomePageState extends State<HomePage> {
           tooltip: available
               ? 'Có bản mới ${update.latest?.version ?? ''} — bấm để xem'
               : 'Kiểm tra cập nhật',
-          onTap: () =>
-              showUpdateDialog(context, update, checkOnOpen: !available),
+          onTap: () => showUpdateDialog(
+            context,
+            update,
+            widget.updater,
+            checkOnOpen: !available,
+          ),
         );
       },
     );

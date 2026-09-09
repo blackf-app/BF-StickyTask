@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.0+3
+version: 1.3.0+4
 
 environment:
   sdk: ^3.13.2
@@ -47,10 +47,17 @@ dependencies:
   uuid: ^4.6.0
   shared_preferences: ^2.5.5
   # Ba cái dưới đây là cho việc kiểm bản mới (xem lib/data/update_service.dart):
-  # đọc version đang chạy từ pubspec, gọi GitHub API, mở trang release.
+  # đọc version đang chạy từ pubspec, gọi GitHub API, mở trang release khi
+  # không tự cài được.
   package_info_plus: ^10.2.1
   url_launcher: ^6.3.2
   http: ^1.6.0
+  # Hai cái dưới đây cho phần TỰ TẢI + TỰ CÀI (lib/data/update_installer.dart):
+  # đối chiếu sha256 của file tải về với `digest` GitHub trả, và giải nén bản
+  # Windows. macOS giải nén bằng `ditto` của hệ thống chứ không dùng `archive`:
+  # zip của .app có symlink + bit exec mà `archive` không giữ đúng.
+  crypto: ^3.0.6
+  archive: ^4.0.7
   # "Mở app khi khởi động máy" bên Windows = một value trong registry. Chỉ
   # dùng khi Platform.isWindows; macOS đi đường khác hẳn (SMAppService, xem
   # lib/app/launch_at_startup.dart).

@@ -16,8 +16,14 @@ url="${1:-}"
 key="${2:-}"
 source_desc="tham số dòng lệnh"
 
-# ── prefs của app (macOS sandbox) ─────────────────────────────────────────────
-plist="$HOME/Library/Containers/$BUNDLE_ID/Data/Library/Preferences/$BUNDLE_ID.plist"
+# ── prefs của app ─────────────────────────────────────────────────────────────
+# App đã bỏ app-sandbox để tự cập nhật được (xem macos/Runner/Release.entitlements),
+# nên prefs nằm ở ~/Library/Preferences. Vẫn thử container cũ để script này
+# chạy được với bản app cài từ trước.
+plist="$HOME/Library/Preferences/$BUNDLE_ID.plist"
+if [[ ! -f "$plist" ]]; then
+  plist="$HOME/Library/Containers/$BUNDLE_ID/Data/Library/Preferences/$BUNDLE_ID.plist"
+fi
 if [[ -z "$url" || -z "$key" ]] && [[ -f "$plist" ]]; then
   p_url=$(/usr/libexec/PlistBuddy -c "Print :flutter.sync_url" "$plist" 2>/dev/null || true)
   p_key=$(/usr/libexec/PlistBuddy -c "Print :flutter.sync_publishable_key" "$plist" 2>/dev/null || true)

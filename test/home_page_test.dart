@@ -6,6 +6,7 @@ import 'package:bf_stickytask/data/local_store.dart';
 import 'package:bf_stickytask/data/note_repo.dart';
 import 'package:bf_stickytask/data/sync_service.dart';
 import 'package:bf_stickytask/data/update_service.dart';
+import 'package:bf_stickytask/data/updater.dart';
 import 'package:bf_stickytask/app/theme.dart';
 import 'package:bf_stickytask/ui/home_page.dart';
 
@@ -36,6 +37,9 @@ Future<NoteRepo> _pumpApp(
           // Fetcher trả null: HomePage kiểm bản mới lúc mở nên test KHÔNG
           // được để nó gọi GitHub thật.
           update: update ?? _offlineUpdate(),
+          // Không tự cài trong test: installer null nên nút cập nhật chỉ
+          // mở trang release, không có gì chạm tới file trên máy.
+          updater: Updater(installer: null, onQuit: () async {}),
         ),
       ),
     ),
@@ -294,7 +298,10 @@ void main() {
     expect(find.text('Cập nhật'), findsOneWidget);
     expect(find.text('Có bản mới: 1.2.0'), findsOneWidget);
     expect(find.text('thêm auto update'), findsOneWidget);
-    expect(find.text('Tải bản mới'), findsOneWidget);
+    // Updater của test có installer null (không chạm file thật), nên popup
+    // hiện đường lùi thay vì "Cập nhật ngay". Luồng tự cài test ở
+    // update_dialog_test.dart / updater_test.dart.
+    expect(find.text('Mở trang tải'), findsOneWidget);
   });
 
   testWidgets('đang bản mới nhất thì KHÔNG popup lúc mở app', (tester) async {

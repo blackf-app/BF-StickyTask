@@ -2,7 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.security.app-sandbox</key>
+	<!-- KHÔNG có com.apple.security.app-sandbox — cố ý.
+
+	     App tự cập nhật: tải zip bản mới rồi ghi đè chính bundle đang chạy
+	     (xem lib/data/update_installer.dart). App sandbox chỉ cho ghi trong
+	     container của chính nó, và process con thừa hưởng sandbox của cha,
+	     nên KHÔNG có cách nào thay .app từ bên trong một app sandboxed —
+	     Sparkle cũng không hỗ trợ app sandbox nếu không kèm XPC helper riêng.
+
+	     App phát hành qua GitHub Releases, không lên Mac App Store, nên
+	     sandbox không bắt buộc.
+
+	     Hệ quả đã xử lý: getApplicationSupportDirectory() đổi từ
+	     ~/Library/Containers/<id>/Data/Library/Application Support/<id>
+	     sang ~/Library/Application Support/<id>. LocalStore migrate dữ liệu
+	     từ container cũ sang một lần, idempotent (lib/data/local_store.dart).
+	     Bật lại sandbox là vừa làm chết auto-update, vừa làm user "mất" note
+	     vì đọc lại đúng container cũ chưa được ghi tiếp. -->
+	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>

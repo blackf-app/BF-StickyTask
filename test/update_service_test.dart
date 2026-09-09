@@ -71,6 +71,59 @@ void main() {
       expect(r.pageUrl, contains('/releases/latest'));
       expect(r.notes, '');
     });
+
+    test('đọc assets: tên, url tải, size, digest', () {
+      final r = AppRelease.fromJson({
+        'tag_name': 'v1.0.0',
+        'assets': [
+          {
+            'name': 'BF-StickyTask-macos.zip',
+            'browser_download_url': 'https://x/macos.zip',
+            'size': 12345,
+            'digest': 'sha256:ABCDEF',
+          },
+          {
+            'name': 'app-arm64-v8a-release.apk',
+            'browser_download_url': 'https://x/arm64.apk',
+            'size': 999,
+          },
+        ],
+      })!;
+
+      expect(r.assets, hasLength(2));
+      expect(r.assets[0].name, 'BF-StickyTask-macos.zip');
+      expect(r.assets[0].url, 'https://x/macos.zip');
+      expect(r.assets[0].size, 12345);
+      // Hex về chữ thường để so trực tiếp với output của crypto.
+      expect(r.assets[0].sha256, 'abcdef');
+      // Không có digest thì null, chứ không phải chuỗi rỗng — verify sẽ bỏ qua.
+      expect(r.assets[1].sha256, isNull);
+    });
+
+    test('asset thiếu name/url hoặc digest thuật toán khác thì bỏ', () {
+      final r = AppRelease.fromJson({
+        'tag_name': 'v1.0.0',
+        'assets': [
+          {'name': 'thieu-url.zip', 'size': 1},
+          {'browser_download_url': 'https://x/thieu-name.zip', 'size': 1},
+          {
+            'name': 'ok.zip',
+            'browser_download_url': 'https://x/ok.zip',
+            'size': 1,
+            // md5 chứ không phải sha256: bỏ hash, đừng so bằng hàm băm sai.
+            'digest': 'md5:abc',
+          },
+        ],
+      })!;
+
+      expect(r.assets, hasLength(1));
+      expect(r.assets.single.name, 'ok.zip');
+      expect(r.assets.single.sha256, isNull);
+    });
+
+    test('không có assets thì rỗng, không null', () {
+      expect(AppRelease.fromJson({'tag_name': 'v1.0.0'})!.assets, isEmpty);
+    });
   });
 
   group('UpdateService.check', () {
