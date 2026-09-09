@@ -518,9 +518,14 @@ Keystore ở `android/bfstickytask-release.jks`, mật khẩu ở `android/key.p
 
 `release.yml` dựng lại keystore + `key.properties` từ 4 secret đó trước khi build,
 rồi **đối chiếu fingerprint** của từng APK với keystore bằng `apksigner` — sai key
-là fail CI, không để lọt ra release. (Dùng `apksigner` chứ không
-`keytool -printcert -jarfile`: minSdk của Flutter đã lên 24 nên AGP bỏ chữ ký v1
-và keytool đọc đúng v1.)
+là fail CI, không để lọt ra release. Hai chỗ dễ sai ở bước đó:
+
+- Dùng `apksigner` chứ không `keytool -printcert -jarfile`: minSdk của Flutter đã lên
+  24 nên AGP bỏ chữ ký v1, mà keytool chỉ đọc được v1.
+- **Không `grep -m1`** trong pipeline: nó thoát sau match đầu, đóng pipe, làm
+  keytool/apksigner ăn SIGPIPE và `pipefail` fail cả bước dù chữ ký đúng — cùng class
+  bug mà [`tools/scan-secrets.sh`](tools/scan-secrets.sh) đã bị. Lấy dòng đầu bằng
+  `sed -n '1s/…/p'`, sed vẫn đọc hết stdin nên không ai bị SIGPIPE.
 
 Máy mới / mất secret thì sinh lại từ keystore đang có:
 

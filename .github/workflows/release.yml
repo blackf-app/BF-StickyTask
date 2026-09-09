@@ -168,15 +168,24 @@ jobs:
 
           # Cả hai bên quy về hex thường, không dấu hai chấm, để so trực tiếp:
           # keytool in `7F:7F:26:…`, apksigner in `7f7f26…`.
+          #
+          # KHÔNG dùng `grep -m1` ở đây: nó thoát ngay sau match đầu, đóng pipe
+          # và làm keytool/apksigner ăn SIGPIPE → `pipefail` fail cả bước dù
+          # chữ ký đúng. Cùng đúng class bug mà tools/scan-secrets.sh đã bị.
+          # Lấy dòng đầu bằng `sed -n '1s/…/p'` — sed vẫn đọc hết stdin nên
+          # không có ai bị SIGPIPE.
           want=$(keytool -list -v -keystore android/bfstickytask-release.jks \
                    -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" \
-                 | grep -m1 'SHA256:' | sed 's/.*SHA256: *//' | tr -d ':' | tr 'A-F' 'a-f')
+                 | grep 'SHA256:' | sed -n '1s/.*SHA256: *//p' | tr -d ':' | tr 'A-F' 'a-f')
           [[ -n "$want" ]] || { echo "không đọc được fingerprint của keystore" >&2; exit 1; }
           echo "keystore  $want"
 
           for apk in build/app/outputs/flutter-apk/*-release.apk; do
+            # 'certificate SHA-256 digest' chứ không chỉ 'SHA-256 digest':
+            # apksigner cũng in digest của public key, đừng so nhầm cái đó.
             got=$("$apksigner" verify --print-certs "$apk" \
-                  | grep -m1 'SHA-256 digest' | sed 's/.*: *//' | tr 'A-F' 'a-f')
+                  | grep 'certificate SHA-256 digest' | sed -n '1s/.*: *//p' | tr 'A-F' 'a-f')
+            [[ -n "$got" ]] || { echo "không đọc được fingerprint của $apk" >&2; exit 1; }
             echo "$(basename "$apk")  $got"
             [[ "$got" == "$want" ]] || { echo "APK ký sai key!" >&2; exit 1; }
           done
