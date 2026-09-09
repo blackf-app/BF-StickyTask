@@ -9,7 +9,8 @@ import '../models/note.dart';
 
 bool get _isTouch => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-/// Một dòng trong tab Current: tick done, sửa inline, xoá, kéo đổi thứ tự.
+/// Một dòng trong tab Current: tick done, đánh dấu đang làm, sửa inline, xoá,
+/// kéo đổi thứ tự.
 class CurrentNoteTile extends StatefulWidget {
   const CurrentNoteTile({
     super.key,
@@ -17,18 +18,43 @@ class CurrentNoteTile extends StatefulWidget {
     required this.index,
     required this.editing,
     required this.onToggleDone,
+    required this.onToggleInProgress,
     required this.onStartEdit,
     required this.onCommitEdit,
     required this.onDelete,
+    required this.onMoveToGroup,
+    this.showDragHandle = true,
+    this.groupLabel,
+    this.selecting = false,
+    this.selected = false,
+    this.onToggleSelect,
   });
 
   final Note note;
   final int index;
   final bool editing;
   final VoidCallback onToggleDone;
+  final VoidCallback onToggleInProgress;
   final VoidCallback onStartEdit;
   final ValueChanged<String> onCommitEdit;
   final VoidCallback onDelete;
+
+  /// Mở popup chọn group để chuyển đúng dòng này vào.
+  final VoidCallback onMoveToGroup;
+
+  /// Tắt khi danh sách đang hiện không phải thứ tự kéo-thả thật (vd: đang lọc
+  /// theo từ khoá) — kéo lúc đó sẽ tính sai vị trí.
+  final bool showDragHandle;
+
+  /// Tên group — chỉ truyền khi đang xem gộp nhiều group ("Tất cả"), để phân
+  /// biệt dòng nào thuộc group nào.
+  final String? groupLabel;
+
+  /// Đang ở chế độ chọn nhiều để chuyển nhóm hàng loạt — tap dòng thì
+  /// chọn/bỏ chọn thay vì sửa/tick, các action khác tạm ẩn để tránh bấm nhầm.
+  final bool selecting;
+  final bool selected;
+  final VoidCallback? onToggleSelect;
 
   @override
   State<CurrentNoteTile> createState() => _CurrentNoteTileState();
@@ -40,8 +66,10 @@ class _CurrentNoteTileState extends State<CurrentNoteTile> {
   @override
   Widget build(BuildContext context) {
     final paper = context.paper;
-    final showActions = _hover || _isTouch || widget.editing;
+    final selecting = widget.selecting;
+    final showActions = !selecting && (_hover || _isTouch || widget.editing);
     final raised = _hover || widget.editing;
+    final inProgress = widget.note.isInProgress;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -50,22 +78,38 @@ class _CurrentNoteTileState extends State<CurrentNoteTile> {
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
-          color: raised ? paper.surface : Colors.transparent,
+          color: selecting && widget.selected
+              ? paper.accent.withValues(alpha: 0.14)
+              : raised
+                  ? paper.surface
+                  : inProgress
+                      ? paper.accent.withValues(alpha: 0.08)
+                      : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
           children: [
-            _Checkbox(done: false, onTap: widget.onToggleDone),
-            const SizedBox(width: 10),
+            selecting
+                ? _Checkbox(
+                    done: widget.selected,
+                    onTap: widget.onToggleSelect ?? () {},
+                    activeColor: paper.accent,
+                  )
+                : _Checkbox(done: false, onTap: widget.onToggleDone),
+            const SizedBox(width: 6),
+            if (!selecting) ...[
+              _ProgressToggle(active: inProgress, onTap: widget.onToggleInProgress),
+              const SizedBox(width: 6),
+            ],
             Expanded(
-              child: widget.editing
+              child: (!selecting && widget.editing)
                   ? InlineEditor(
                       initial: widget.note.text,
                       onCommit: widget.onCommitEdit,
                     )
                   : GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: widget.onStartEdit,
+                      onTap: selecting ? widget.onToggleSelect : widget.onStartEdit,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Text(
@@ -79,23 +123,36 @@ class _CurrentNoteTileState extends State<CurrentNoteTile> {
                       ),
                     ),
             ),
-            _TileAction(
-              icon: Icons.close_rounded,
-              tooltip: 'Xoá',
-              visible: showActions,
-              onTap: widget.onDelete,
-            ),
-            ReorderableDragStartListener(
-              index: widget.index,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: Icon(
-                  Icons.drag_indicator_rounded,
-                  size: 16,
-                  color: showActions ? paper.inkFaint : paper.line,
-                ),
+            if (widget.groupLabel != null) ...[
+              const SizedBox(width: 4),
+              _GroupTag(label: widget.groupLabel!),
+            ],
+            if (!selecting) ...[
+              _TileAction(
+                icon: Icons.drive_file_move_outline,
+                tooltip: 'Chuyển nhóm',
+                visible: showActions,
+                onTap: widget.onMoveToGroup,
               ),
-            ),
+              _TileAction(
+                icon: Icons.close_rounded,
+                tooltip: 'Xoá',
+                visible: showActions,
+                onTap: widget.onDelete,
+              ),
+              if (widget.showDragHandle)
+                ReorderableDragStartListener(
+                  index: widget.index,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: Icon(
+                      Icons.drag_indicator_rounded,
+                      size: 16,
+                      color: showActions ? paper.inkFaint : paper.line,
+                    ),
+                  ),
+                ),
+            ],
           ],
         ),
       ),
@@ -110,11 +167,26 @@ class HistoryNoteTile extends StatefulWidget {
     required this.note,
     required this.onRestore,
     required this.onDelete,
+    required this.onMoveToGroup,
+    this.groupLabel,
+    this.selecting = false,
+    this.selected = false,
+    this.onToggleSelect,
   });
 
   final Note note;
   final VoidCallback onRestore;
   final VoidCallback onDelete;
+
+  /// Mở popup chọn group để chuyển đúng dòng này vào.
+  final VoidCallback onMoveToGroup;
+
+  /// Tên group — chỉ truyền khi đang xem gộp nhiều group ("Tất cả").
+  final String? groupLabel;
+
+  final bool selecting;
+  final bool selected;
+  final VoidCallback? onToggleSelect;
 
   @override
   State<HistoryNoteTile> createState() => _HistoryNoteTileState();
@@ -126,43 +198,66 @@ class _HistoryNoteTileState extends State<HistoryNoteTile> {
   @override
   Widget build(BuildContext context) {
     final paper = context.paper;
-    final showActions = _hover || _isTouch;
+    final selecting = widget.selecting;
+    final showActions = !selecting && (_hover || _isTouch);
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        decoration: BoxDecoration(
-          color: _hover ? paper.surface : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            _Checkbox(done: true, onTap: widget.onRestore),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.note.text,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.3,
-                      color: paper.inkSoft,
-                      decoration: TextDecoration.lineThrough,
-                      decorationColor: paper.inkFaint,
+    final container = Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: selecting && widget.selected
+            ? paper.accent.withValues(alpha: 0.14)
+            : _hover
+                ? paper.surface
+                : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          selecting
+              ? _Checkbox(
+                  done: widget.selected,
+                  onTap: widget.onToggleSelect ?? () {},
+                  activeColor: paper.accent,
+                )
+              : _Checkbox(done: true, onTap: widget.onRestore),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.note.text,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.3,
+                    color: paper.inkSoft,
+                    decoration: TextDecoration.lineThrough,
+                    decorationColor: paper.inkFaint,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Row(
+                  children: [
+                    Text(
+                      timeAgoVi(widget.note.doneAt ?? widget.note.updatedAt),
+                      style: TextStyle(fontSize: 10.5, color: paper.inkFaint),
                     ),
-                  ),
-                  const SizedBox(height: 1),
-                  Text(
-                    timeAgoVi(widget.note.doneAt ?? widget.note.updatedAt),
-                    style: TextStyle(fontSize: 10.5, color: paper.inkFaint),
-                  ),
-                ],
-              ),
+                    if (widget.groupLabel != null) ...[
+                      const SizedBox(width: 6),
+                      _GroupTag(label: widget.groupLabel!),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (!selecting) ...[
+            _TileAction(
+              icon: Icons.drive_file_move_outline,
+              tooltip: 'Chuyển nhóm',
+              visible: showActions,
+              onTap: widget.onMoveToGroup,
             ),
             _TileAction(
               icon: Icons.undo_rounded,
@@ -177,8 +272,20 @@ class _HistoryNoteTileState extends State<HistoryNoteTile> {
               onTap: widget.onDelete,
             ),
           ],
-        ),
+        ],
       ),
+    );
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: selecting
+          ? GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onToggleSelect,
+              child: container,
+            )
+          : container,
     );
   }
 }
@@ -244,15 +351,73 @@ class _InlineEditorState extends State<InlineEditor> {
   }
 }
 
-class _Checkbox extends StatelessWidget {
-  const _Checkbox({required this.done, required this.onTap});
+/// Nút đánh dấu "đang làm" — luôn hiện (không chỉ lúc hover) để nhìn cả danh
+/// sách là biết ngay việc nào đang được làm dở.
+class _ProgressToggle extends StatelessWidget {
+  const _ProgressToggle({required this.active, required this.onTap});
 
-  final bool done;
+  final bool active;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final paper = context.paper;
+    return Tooltip(
+      message: active ? 'Đang làm — bấm để bỏ đánh dấu' : 'Đánh dấu đang làm',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: Icon(
+            active ? Icons.bolt_rounded : Icons.bolt_outlined,
+            size: 15,
+            color: active ? paper.accent : paper.line,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Nhãn nhỏ hiện tên group — chỉ dùng khi đang xem gộp nhiều group.
+class _GroupTag extends StatelessWidget {
+  const _GroupTag({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final paper = context.paper;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: paper.line.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 10, color: paper.inkSoft),
+      ),
+    );
+  }
+}
+
+class _Checkbox extends StatelessWidget {
+  const _Checkbox({required this.done, required this.onTap, this.activeColor});
+
+  final bool done;
+  final VoidCallback onTap;
+
+  /// Màu khi `done`. Bỏ trống thì dùng màu "đã xong" mặc định — truyền tay
+  /// (vd màu accent) khi tái dùng widget này cho việc khác, như tick chọn.
+  final Color? activeColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final paper = context.paper;
+    final color = activeColor ?? paper.done;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -264,9 +429,9 @@ class _Checkbox extends StatelessWidget {
           height: 18,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: done ? paper.done : Colors.transparent,
+            color: done ? color : Colors.transparent,
             border: Border.all(
-              color: done ? paper.done : paper.inkFaint,
+              color: done ? color : paper.inkFaint,
               width: 1.6,
             ),
           ),

@@ -13,7 +13,8 @@ class _MemoryStore extends LocalStore {
   Future<LocalSnapshot> load() async => const LocalSnapshot(notes: []);
 
   @override
-  Future<void> save(List notes, {String? lastPull}) async => saved = notes;
+  Future<void> save(List notes, List groups, {String? lastPull}) async =>
+      saved = notes;
 }
 
 void main() {

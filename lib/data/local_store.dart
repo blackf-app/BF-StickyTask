@@ -3,13 +3,15 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../models/group.dart';
 import '../models/note.dart';
 
 /// Ảnh chụp dữ liệu đọc lên từ file local.
 class LocalSnapshot {
-  const LocalSnapshot({required this.notes, this.lastPull});
+  const LocalSnapshot({required this.notes, this.groups = const [], this.lastPull});
 
   final List<Note> notes;
+  final List<Group> groups;
   final String? lastPull;
 }
 
@@ -86,14 +88,26 @@ class LocalStore {
           .whereType<Map<String, dynamic>>()
           .map(Note.fromLocalJson)
           .toList();
-      return LocalSnapshot(notes: notes, lastPull: json['last_pull'] as String?);
+      final groups = ((json['groups'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Group.fromLocalJson)
+          .toList();
+      return LocalSnapshot(
+        notes: notes,
+        groups: groups,
+        lastPull: json['last_pull'] as String?,
+      );
     } catch (_) {
       // File hỏng thì coi như chưa có dữ liệu — server sẽ pull lại.
       return const LocalSnapshot(notes: []);
     }
   }
 
-  Future<void> save(List<Note> notes, {String? lastPull}) async {
+  Future<void> save(
+    List<Note> notes,
+    List<Group> groups, {
+    String? lastPull,
+  }) async {
     final file = await _file();
     final tmp = File('${file.path}.tmp');
     await tmp.writeAsString(
@@ -101,6 +115,7 @@ class LocalStore {
         'version': _schemaVersion,
         'last_pull': lastPull,
         'notes': notes.map((n) => n.toLocalJson()).toList(),
+        'groups': groups.map((g) => g.toLocalJson()).toList(),
       }),
       flush: true,
     );

@@ -9,13 +9,14 @@ import 'package:bf_stickytask/data/update_service.dart';
 import 'package:bf_stickytask/data/updater.dart';
 import 'package:bf_stickytask/app/theme.dart';
 import 'package:bf_stickytask/ui/home_page.dart';
+import 'package:bf_stickytask/ui/note_tile.dart';
 
 class _MemoryStore extends LocalStore {
   @override
   Future<LocalSnapshot> load() async => const LocalSnapshot(notes: []);
 
   @override
-  Future<void> save(List notes, {String? lastPull}) async {}
+  Future<void> save(List notes, List groups, {String? lastPull}) async {}
 }
 
 Future<NoteRepo> _pumpApp(
@@ -57,19 +58,23 @@ Future<void> _drainDebounce(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// Hover vào dòng [row] rồi bấm nút xoá của nó. Trên desktop `_TileAction`
-/// chỉ hiện khi hover — chưa hover là `IgnorePointer` nên tap không ăn.
+Future<void> _tapDelete(WidgetTester tester, Finder row) async {
+  await _hoverAndTap(tester, row, Icons.close_rounded);
+}
+
+/// Hover vào dòng [row] rồi bấm action icon [icon] của nó. Trên desktop
+/// `_TileAction` chỉ hiện khi hover — chưa hover là `IgnorePointer` nên tap
+/// không ăn.
 ///
 /// Pointer được nhả ngay sau khi tap: thêm pointer chuột thứ hai khi chưa nhả
-/// cái đầu là vỡ assert trong MouseTracker, mà test xoá thì bấm 2 lần (huỷ
-/// rồi xoá thật).
-Future<void> _tapDelete(WidgetTester tester, Finder row) async {
+/// cái đầu là vỡ assert trong MouseTracker.
+Future<void> _hoverAndTap(WidgetTester tester, Finder row, IconData icon) async {
   final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
   await gesture.addPointer(location: Offset.zero);
   await gesture.moveTo(tester.getCenter(row));
   await tester.pumpAndSettle();
 
-  await tester.tap(find.byIcon(Icons.close_rounded));
+  await tester.tap(find.byIcon(icon));
   await tester.pumpAndSettle();
 
   await gesture.removePointer();
@@ -79,6 +84,20 @@ Future<void> _tapDelete(WidgetTester tester, Finder row) async {
 Future<void> _addNote(WidgetTester tester, String text) async {
   await tester.enterText(find.byType(TextField).last, text);
   await tester.testTextInput.receiveAction(TextInputAction.done);
+  await tester.pumpAndSettle();
+}
+
+/// Mở popup quản lý nhóm, thêm nhóm "Công ty" rồi đóng lại.
+Future<void> _addWorkGroup(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('Quản lý nhóm'));
+  await tester.pumpAndSettle();
+  await tester.enterText(
+    find.widgetWithText(TextField, 'Tên nhóm mới'),
+    'Công ty',
+  );
+  await tester.tap(find.byTooltip('Thêm nhóm'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Đóng'));
   await tester.pumpAndSettle();
 }
 
@@ -140,7 +159,13 @@ void main() {
     await tester.tap(find.text('ten cu'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.byType(TextField).first, 'ten moi');
+    // Không dùng `find.byType(TextField).first` nữa: từ khi có ô tìm việc
+    // luôn hiện ở trên, nó mới là TextField đầu tiên trong cây widget.
+    final editorField = find.descendant(
+      of: find.byType(InlineEditor),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(editorField, 'ten moi');
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
 
@@ -398,6 +423,144 @@ void main() {
 
     expect(find.byIcon(Icons.rocket_launch_outlined), findsNothing);
     expect(find.byIcon(Icons.rocket_launch_rounded), findsNothing);
+  });
+
+  testWidgets('tìm theo chữ chỉ hiện đúng việc khớp từ khoá', (tester) async {
+    await _pumpApp(tester);
+    await _addNote(tester, 'mua sua');
+    await _addNote(tester, 'don nha');
+
+    // Ô tìm mặc định ẩn — phải bấm nút kính lúp để hiện.
+    expect(find.byKey(const Key('search-field')), findsNothing);
+    await tester.tap(find.byTooltip('Tìm việc'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('search-field')), findsOneWidget);
+
+    await tester.enterText(find.byKey(const Key('search-field')), 'sua');
+    await tester.pumpAndSettle();
+
+    expect(find.text('mua sua'), findsOneWidget);
+    expect(find.text('don nha'), findsNothing);
+
+    await tester.enterText(find.byKey(const Key('search-field')), '');
+    await tester.pumpAndSettle();
+
+    expect(find.text('mua sua'), findsOneWidget);
+    expect(find.text('don nha'), findsOneWidget);
+
+    // Bấm lại nút kính lúp thì ẩn ô tìm đi.
+    await tester.tap(find.byTooltip('Ẩn ô tìm việc'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('search-field')), findsNothing);
+
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('bấm icon tia chớp thì đánh dấu / bỏ đánh dấu đang làm',
+      (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'viec dang lam');
+
+    expect(repo.current.single.isInProgress, isFalse);
+    expect(find.byIcon(Icons.bolt_outlined), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.bolt_outlined));
+    await tester.pumpAndSettle();
+
+    expect(repo.current.single.isInProgress, isTrue);
+    expect(find.byIcon(Icons.bolt_rounded), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.bolt_rounded));
+    await tester.pumpAndSettle();
+    expect(repo.current.single.isInProgress, isFalse);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('thêm nhóm mới rồi lọc theo nhóm chỉ hiện đúng việc của nhóm đó',
+      (tester) async {
+    await _pumpApp(tester);
+    await _addNote(tester, 'viec ca nhan');
+    await _addWorkGroup(tester);
+
+    // Chọn chip "Công ty" rồi thêm việc — việc mới phải rơi đúng nhóm này.
+    await tester.tap(find.text('Công ty'));
+    await tester.pumpAndSettle();
+    await _addNote(tester, 'viec cong ty');
+
+    expect(find.text('viec cong ty'), findsOneWidget);
+    expect(find.text('viec ca nhan'), findsNothing);
+
+    await tester.tap(find.text('Mọi nhóm'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('viec cong ty'), findsOneWidget);
+    expect(find.text('viec ca nhan'), findsOneWidget);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('bấm icon chuyển nhóm ở 1 dòng thì đổi đúng group của dòng đó',
+      (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'viec can chuyen');
+    await _addWorkGroup(tester);
+
+    await _hoverAndTap(
+      tester,
+      find.text('viec can chuyen'),
+      Icons.drive_file_move_outline,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Chuyển vào nhóm'), findsOneWidget);
+    await tester.tap(find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.text('Công ty'),
+    ));
+    await tester.pumpAndSettle();
+
+    final workGroupId = repo.groups.firstWhere((g) => g.name == 'Công ty').id;
+    expect(repo.current.single.groupId, workGroupId);
+    await _drainDebounce(tester);
+  });
+
+  testWidgets('chọn nhiều việc rồi chuyển hàng loạt vào 1 nhóm',
+      (tester) async {
+    final repo = await _pumpApp(tester);
+    await _addNote(tester, 'viec 1');
+    await _addNote(tester, 'viec 2');
+    await _addNote(tester, 'viec rieng');
+    await _addWorkGroup(tester);
+
+    await tester.tap(find.byTooltip('Chọn nhiều để chuyển nhóm'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('viec 1'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('viec 2'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 đã chọn'), findsOneWidget);
+
+    await tester.tap(find.text('Chuyển nhóm'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.text('Công ty'),
+    ));
+    await tester.pumpAndSettle();
+
+    // Thoát chế độ chọn tự động sau khi chuyển xong.
+    expect(find.text('Chọn việc cần chuyển nhóm'), findsNothing);
+
+    final workGroupId = repo.groups.firstWhere((g) => g.name == 'Công ty').id;
+    final movedTexts = repo.current
+        .where((n) => n.groupId == workGroupId)
+        .map((n) => n.text)
+        .toList();
+    expect(movedTexts, containsAll(['viec 1', 'viec 2']));
+    expect(movedTexts, isNot(contains('viec rieng')));
+    await _drainDebounce(tester);
   });
 
 }

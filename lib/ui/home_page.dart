@@ -13,6 +13,7 @@ import '../data/update_service.dart';
 import '../data/updater.dart';
 import '../models/note.dart';
 import 'confirm_dialog.dart';
+import 'group_dialog.dart';
 import 'note_tile.dart';
 import 'sync_dialog.dart';
 import 'update_dialog.dart';
@@ -40,6 +41,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _addController = TextEditingController();
   final FocusNode _addFocus = FocusNode();
+  final TextEditingController _searchController = TextEditingController();
 
   int _tab = 0;
   String? _editingId;
@@ -48,6 +50,22 @@ class _HomePageState extends State<HomePage> {
   /// về "Tất cả", để không có lần nào mở app ra thấy History trống mà không
   /// hiểu vì sao.
   HistoryFilter _historyFilter = HistoryFilter.all;
+
+  /// Group đang xem — `null` là "Tất cả" (gộp mọi group, hành vi cũ).
+  /// Dùng chung cho cả 2 tab, giống cách 2 tab dùng chung 1 bộ khung.
+  String? _activeGroupId;
+
+  /// Lọc theo chữ, dùng chung cho cả 2 tab. Chỉ sống trong phiên chạy, giống
+  /// [_historyFilter].
+  String _searchQuery = '';
+
+  /// Ô tìm việc mặc định ẩn — chỉ hiện khi bấm nút kính lúp, đỡ chiếm chỗ
+  /// trong cửa sổ vốn đã hẹp.
+  bool _searchVisible = false;
+
+  /// Chế độ chọn nhiều để chuyển hàng loạt sang group khác.
+  bool _selecting = false;
+  final Set<String> _selectedIds = {};
 
   bool get _isDesktop => DesktopIntegration.isSupported;
 
@@ -70,13 +88,14 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _addController.dispose();
     _addFocus.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   void _submitAdd() {
     final text = _addController.text.trim();
     if (text.isEmpty) return;
-    widget.repo.add(text);
+    widget.repo.add(text, groupId: _activeGroupId);
     _addController.clear();
     _addFocus.requestFocus();
   }
@@ -84,6 +103,10 @@ class _HomePageState extends State<HomePage> {
   void _onEscape() {
     if (_editingId != null) {
       setState(() => _editingId = null);
+      return;
+    }
+    if (_selecting) {
+      _exitSelection();
       return;
     }
     if (_isDesktop) DesktopIntegration.instance.hideWindow();
@@ -117,6 +140,8 @@ class _HomePageState extends State<HomePage> {
               children: [
                 _buildTitleBar(),
                 _buildTabs(),
+                _buildGroupBar(),
+                if (_searchVisible) _buildSearchBar(),
                 Expanded(
                   child: ListenableBuilder(
                     listenable: widget.repo,
@@ -130,7 +155,10 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 ),
-                if (_tab == 0) _buildAddBar(),
+                if (_selecting)
+                  _buildSelectionBar()
+                else if (_tab == 0)
+                  _buildAddBar(),
               ],
             ),
           ),
@@ -382,6 +410,229 @@ class _HomePageState extends State<HomePage> {
 
   // endregion
 
+  // region Group + search bar (dùng chung cho cả 2 tab)
+
+  Widget _buildGroupBar() {
+    return ListenableBuilder(
+      listenable: widget.repo,
+      builder: (context, _) {
+        final paper = context.paper;
+        final groups = widget.repo.groups;
+
+        // Group đang chọn vừa bị xoá (vd: xoá ở popup quản lý) → về "Tất cả",
+        // không thì lọc theo 1 id không còn tồn tại sẽ luôn ra danh sách rỗng.
+        if (_activeGroupId != null && !groups.any((g) => g.id == _activeGroupId)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _activeGroupId = null);
+          });
+        }
+
+        return SizedBox(
+          height: 26,
+          child: Row(
+            children: [
+              _BarButton(
+                icon: _searchVisible ? Icons.search_off_rounded : Icons.search_rounded,
+                color: _searchVisible ? paper.accent : null,
+                tooltip: _searchVisible ? 'Ẩn ô tìm việc' : 'Tìm việc',
+                onTap: _toggleSearch,
+              ),
+              Expanded(
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  children: [
+                    _FilterChip(
+                      label: 'Mọi nhóm',
+                      selected: _activeGroupId == null,
+                      onTap: () => setState(() => _activeGroupId = null),
+                    ),
+                    for (final g in groups)
+                      _FilterChip(
+                        label: g.name,
+                        selected: _activeGroupId == g.id,
+                        onTap: () => setState(() => _activeGroupId = g.id),
+                      ),
+                  ],
+                ),
+              ),
+              _BarButton(
+                icon: _selecting ? Icons.close_rounded : Icons.checklist_rounded,
+                color: _selecting ? paper.accent : null,
+                tooltip: _selecting ? 'Huỷ chọn' : 'Chọn nhiều để chuyển nhóm',
+                onTap: _toggleSelecting,
+              ),
+              _BarButton(
+                icon: Icons.category_outlined,
+                tooltip: 'Quản lý nhóm',
+                onTap: () => showGroupManagerDialog(context, widget.repo),
+              ),
+              const SizedBox(width: 4),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _searchVisible = !_searchVisible;
+      if (!_searchVisible) {
+        _searchQuery = '';
+        _searchController.clear();
+      }
+    });
+  }
+
+  void _toggleSelecting() {
+    setState(() {
+      _selecting = !_selecting;
+      _selectedIds.clear();
+      _editingId = null;
+    });
+  }
+
+  void _exitSelection() {
+    setState(() {
+      _selecting = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelected(String noteId) {
+    setState(() {
+      if (!_selectedIds.remove(noteId)) _selectedIds.add(noteId);
+    });
+  }
+
+  /// Mở popup chọn group cho đúng 1 việc.
+  Future<void> _moveNoteToGroup(Note note) async {
+    final groupId = await showGroupPickerDialog(
+      context,
+      widget.repo,
+      currentGroupId: note.groupId,
+    );
+    if (groupId == null) return;
+    widget.repo.setGroup(note.id, groupId);
+  }
+
+  /// Mở popup chọn group cho mọi việc đang được chọn, rồi thoát chế độ chọn.
+  Future<void> _moveSelectedToGroup() async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    final groupId = await showGroupPickerDialog(
+      context,
+      widget.repo,
+      title: 'Chuyển ${ids.length} việc vào nhóm',
+    );
+    if (groupId == null || !mounted) return;
+    for (final id in ids) {
+      widget.repo.setGroup(id, groupId);
+    }
+    _exitSelection();
+  }
+
+  Widget _buildSelectionBar() {
+    final paper = context.paper;
+    final count = _selectedIds.length;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 8),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: paper.line, width: 0.8)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              count == 0 ? 'Chọn việc cần chuyển nhóm' : '$count đã chọn',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12.5, color: paper.inkSoft),
+            ),
+          ),
+          TextButton(
+            onPressed: count == 0 ? null : _moveSelectedToGroup,
+            child: Text(
+              'Chuyển nhóm',
+              style: TextStyle(color: count == 0 ? paper.inkFaint : paper.accent),
+            ),
+          ),
+          TextButton(
+            onPressed: _exitSelection,
+            child: const Text('Huỷ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    final paper = context.paper;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 2, 10, 6),
+      child: SizedBox(
+        height: 30,
+        child: TextField(
+          key: const Key('search-field'),
+          controller: _searchController,
+          style: TextStyle(fontSize: 12.5, color: paper.ink),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: 'Tìm việc…',
+            hintStyle: TextStyle(fontSize: 12, color: paper.inkFaint),
+            filled: true,
+            fillColor: paper.line.withValues(alpha: 0.35),
+            prefixIcon: Icon(Icons.search_rounded, size: 16, color: paper.inkFaint),
+            prefixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 0),
+            suffixIcon: _searchQuery.isEmpty
+                ? null
+                : InkWell(
+                    onTap: () => setState(() {
+                      _searchController.clear();
+                      _searchQuery = '';
+                    }),
+                    child: Icon(Icons.close_rounded, size: 15, color: paper.inkFaint),
+                  ),
+            suffixIconConstraints: const BoxConstraints(minWidth: 28, minHeight: 0),
+            contentPadding: const EdgeInsets.symmetric(vertical: 6),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide.none,
+            ),
+          ),
+          onChanged: (v) => setState(() => _searchQuery = v.trim()),
+        ),
+      ),
+    );
+  }
+
+  /// Lọc theo group đang chọn + từ khoá tìm — dùng cho cả Current lẫn History.
+  List<Note> _applyFilters(List<Note> notes) {
+    Iterable<Note> result = notes;
+    if (_activeGroupId != null) {
+      result = result.where((n) => n.groupId == _activeGroupId);
+    }
+    if (_searchQuery.isNotEmpty) {
+      final q = _searchQuery.toLowerCase();
+      result = result.where((n) => n.text.toLowerCase().contains(q));
+    }
+    return result.toList();
+  }
+
+  /// Tên group để gắn thêm vào dòng note — chỉ khi đang xem gộp "Tất cả" VÀ
+  /// có nhiều hơn 1 group, không thì thừa thông tin.
+  String? _groupLabelFor(Note note) {
+    if (_activeGroupId != null) return null;
+    final groups = widget.repo.groups;
+    if (groups.length <= 1) return null;
+    for (final g in groups) {
+      if (g.id == note.groupId) return g.name;
+    }
+    return null;
+  }
+
+  // endregion
+
   // region Current tab
 
   Widget _buildCurrentTab(List<Note> notes) {
@@ -393,13 +644,34 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    final filtered = _applyFilters(notes);
+    if (filtered.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.search_off_rounded,
+        title: 'Không có việc nào khớp',
+        subtitle: 'Đổi từ khoá tìm hoặc nhóm đang chọn ở trên.',
+      );
+    }
+
+    // Đang tìm theo chữ, hoặc đang ở chế độ chọn nhiều, thì danh sách hiện
+    // không còn đúng thứ tự kéo-thả thật (hoặc tap dòng nghĩa là chọn chứ
+    // không phải kéo) — tắt kéo-thả, không thì vị trí thả bị tính sai.
+    if (_searchQuery.isNotEmpty || _selecting) {
+      return ListView.builder(
+        padding: const EdgeInsets.only(bottom: 6),
+        itemCount: filtered.length,
+        itemBuilder: (context, index) =>
+            _currentTile(filtered[index], index, draggable: false),
+      );
+    }
+
     return ReorderableListView.builder(
       padding: const EdgeInsets.only(bottom: 6),
       buildDefaultDragHandles: false,
-      itemCount: notes.length,
+      itemCount: filtered.length,
       onReorderItem: (oldIndex, newIndex) {
         setState(() => _editingId = null);
-        widget.repo.reorder(oldIndex, newIndex);
+        widget.repo.reorder(oldIndex, newIndex, groupId: _activeGroupId);
       },
       proxyDecorator: (child, index, animation) => Material(
         color: context.paper.surface,
@@ -408,31 +680,41 @@ class _HomePageState extends State<HomePage> {
         borderRadius: BorderRadius.circular(8),
         child: child,
       ),
-      itemBuilder: (context, index) {
-        final note = notes[index];
-        return CurrentNoteTile(
-          key: ValueKey(note.id),
-          note: note,
-          index: index,
-          editing: _editingId == note.id,
-          onToggleDone: () {
-            setState(() => _editingId = null);
-            widget.repo.setDone(note.id, true);
-          },
-          onStartEdit: () => setState(() => _editingId = note.id),
-          onCommitEdit: (text) {
-            widget.repo.editText(note.id, text);
-            if (mounted && _editingId == note.id) {
-              setState(() => _editingId = null);
-            }
-          },
-          onDelete: () => _confirmRemove(
-            note,
-            title: 'Xoá việc này?',
-            message: 'Việc sẽ bị xoá trên mọi máy.',
-          ),
-        );
+      itemBuilder: (context, index) =>
+          _currentTile(filtered[index], index, draggable: true),
+    );
+  }
+
+  Widget _currentTile(Note note, int index, {required bool draggable}) {
+    return CurrentNoteTile(
+      key: ValueKey(note.id),
+      note: note,
+      index: index,
+      editing: _editingId == note.id,
+      showDragHandle: draggable,
+      groupLabel: _groupLabelFor(note),
+      selecting: _selecting,
+      selected: _selectedIds.contains(note.id),
+      onToggleSelect: () => _toggleSelected(note.id),
+      onToggleDone: () {
+        setState(() => _editingId = null);
+        widget.repo.setDone(note.id, true);
       },
+      onToggleInProgress: () =>
+          widget.repo.setInProgress(note.id, !note.isInProgress),
+      onStartEdit: () => setState(() => _editingId = note.id),
+      onCommitEdit: (text) {
+        widget.repo.editText(note.id, text);
+        if (mounted && _editingId == note.id) {
+          setState(() => _editingId = null);
+        }
+      },
+      onMoveToGroup: () => _moveNoteToGroup(note),
+      onDelete: () => _confirmRemove(
+        note,
+        title: 'Xoá việc này?',
+        message: 'Việc sẽ bị xoá trên mọi máy.',
+      ),
     );
   }
 
@@ -491,10 +773,12 @@ class _HomePageState extends State<HomePage> {
     }
 
     final paper = context.paper;
-    final filtered = notes
+    final filtered = _applyFilters(notes)
         .where((n) => _historyFilter.matches(n.doneAt ?? n.updatedAt))
         .toList();
-    final filtering = _historyFilter.isActive;
+    final filtering = _historyFilter.isActive ||
+        _activeGroupId != null ||
+        _searchQuery.isNotEmpty;
 
     return Column(
       children: [
@@ -537,7 +821,7 @@ class _HomePageState extends State<HomePage> {
               ? const _EmptyState(
                   icon: Icons.event_busy_outlined,
                   title: 'Không có việc nào trong khoảng này',
-                  subtitle: 'Đổi bộ lọc ngày ở trên để xem việc khác.',
+                  subtitle: 'Đổi bộ lọc ở trên để xem việc khác.',
                 )
               : ListView.builder(
                   padding: const EdgeInsets.only(bottom: 10),
@@ -547,6 +831,11 @@ class _HomePageState extends State<HomePage> {
                     return HistoryNoteTile(
                       key: ValueKey(note.id),
                       note: note,
+                      groupLabel: _groupLabelFor(note),
+                      selecting: _selecting,
+                      selected: _selectedIds.contains(note.id),
+                      onToggleSelect: () => _toggleSelected(note.id),
+                      onMoveToGroup: () => _moveNoteToGroup(note),
                       onRestore: () => widget.repo.setDone(note.id, false),
                       onDelete: () => _confirmRemove(
                         note,
@@ -638,17 +927,31 @@ class _HomePageState extends State<HomePage> {
     widget.repo.remove(note.id);
   }
 
-  /// "Xoá hết" chỉ xoá đúng những dòng đang hiện — đang lọc theo ngày mà xoá
-  /// sạch cả tab thì user mất dữ liệu ngoài khoảng họ đang nhìn.
+  /// "Xoá hết" chỉ xoá đúng những dòng đang hiện — đang lọc (ngày, nhóm, hay
+  /// từ khoá) mà xoá sạch cả tab thì user mất dữ liệu ngoài phần họ đang nhìn.
   Future<void> _confirmClearHistory(List<Note> shown) async {
-    final filtering = _historyFilter.isActive;
+    final dateFiltering = _historyFilter.isActive;
+    final otherFiltering = _activeGroupId != null || _searchQuery.isNotEmpty;
+
+    final String title;
+    final String message;
+    if (dateFiltering) {
+      title = 'Xoá hết trong khoảng đang lọc?';
+      message = '${shown.length} việc xong trong "${_historyFilter.label}" sẽ bị '
+          'xoá trên mọi máy. Việc ngoài khoảng này giữ nguyên.';
+    } else if (otherFiltering) {
+      title = 'Xoá hết đang lọc?';
+      message = '${shown.length} việc đang hiện sẽ bị xoá trên mọi máy. '
+          'Việc bị nhóm/từ khoá đang lọc ẩn đi vẫn giữ nguyên.';
+    } else {
+      title = 'Xoá hết History?';
+      message = '${shown.length} việc đã xong sẽ bị xoá trên mọi máy.';
+    }
+
     final ok = await confirmDelete(
       context,
-      title: filtering ? 'Xoá hết trong khoảng đang lọc?' : 'Xoá hết History?',
-      message: filtering
-          ? '${shown.length} việc xong trong "${_historyFilter.label}" sẽ bị '
-              'xoá trên mọi máy. Việc ngoài khoảng này giữ nguyên.'
-          : '${shown.length} việc đã xong sẽ bị xoá trên mọi máy.',
+      title: title,
+      message: message,
       confirmLabel: 'Xoá hết',
     );
     if (!ok || !mounted) return;

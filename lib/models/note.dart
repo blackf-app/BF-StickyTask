@@ -1,7 +1,9 @@
 import 'package:uuid/uuid.dart';
 
-/// Trạng thái của một note: đang cần làm, hoặc đã xong (nằm ở tab History).
-enum NoteStatus { current, done }
+import 'group.dart';
+
+/// Trạng thái của một note: chưa bắt đầu, đang làm, hoặc đã xong (tab History).
+enum NoteStatus { current, inProgress, done }
 
 /// Một dòng note. Mọi mốc thời gian đều lưu ở UTC để so sánh được giữa các máy.
 class Note {
@@ -12,13 +14,19 @@ class Note {
     required this.sort,
     required this.createdAt,
     required this.updatedAt,
+    required this.groupId,
     this.doneAt,
     this.deleted = false,
     this.dirty = false,
   });
 
   /// Tạo note mới ở tab Current. `dirty = true` để sync đẩy lên server.
-  factory Note.create({required String text, required double sort}) {
+  /// [groupId] bỏ trống thì rơi vào group mặc định.
+  factory Note.create({
+    required String text,
+    required double sort,
+    String? groupId,
+  }) {
     final now = DateTime.now().toUtc();
     return Note(
       id: const Uuid().v4(),
@@ -27,6 +35,7 @@ class Note {
       sort: sort,
       createdAt: now,
       updatedAt: now,
+      groupId: groupId ?? Group.defaultId,
       dirty: true,
     );
   }
@@ -39,6 +48,7 @@ class Note {
         createdAt: _timeFrom(j['created_at']) ?? DateTime.now().toUtc(),
         doneAt: _timeFrom(j['done_at']),
         updatedAt: _timeFrom(j['updated_at']) ?? DateTime.now().toUtc(),
+        groupId: (j['group_id'] as String?) ?? Group.defaultId,
         deleted: j['deleted'] == true,
         dirty: j['dirty'] == true,
       );
@@ -61,6 +71,9 @@ class Note {
   /// Mốc last-write-wins khi trộn dữ liệu giữa các máy.
   DateTime updatedAt;
 
+  /// Group chứa note này — xem [Group].
+  String groupId;
+
   /// Tombstone — xoá mềm để lệnh xoá lan được sang máy khác.
   bool deleted;
 
@@ -68,15 +81,17 @@ class Note {
   bool dirty;
 
   bool get isDone => status == NoteStatus.done;
+  bool get isInProgress => status == NoteStatus.inProgress;
 
   Map<String, dynamic> toLocalJson() => {
         'id': id,
         'text': text,
-        'status': status.name,
+        'status': _statusToName(status),
         'sort': sort,
         'created_at': createdAt.toIso8601String(),
         'done_at': doneAt?.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
+        'group_id': groupId,
         'deleted': deleted,
         'dirty': dirty,
       };
@@ -87,16 +102,26 @@ class Note {
   Map<String, dynamic> toRow() => {
         'id': id,
         'text': text,
-        'status': status.name,
+        'status': _statusToName(status),
         'sort': sort,
         'created_at': createdAt.toIso8601String(),
         'done_at': doneAt?.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
+        'group_id': groupId,
         'deleted': deleted,
       };
 
-  static NoteStatus _statusFrom(Object? v) =>
-      v == 'done' ? NoteStatus.done : NoteStatus.current;
+  static NoteStatus _statusFrom(Object? v) => switch (v) {
+        'done' => NoteStatus.done,
+        'in_progress' => NoteStatus.inProgress,
+        _ => NoteStatus.current,
+      };
+
+  static String _statusToName(NoteStatus s) => switch (s) {
+        NoteStatus.current => 'current',
+        NoteStatus.inProgress => 'in_progress',
+        NoteStatus.done => 'done',
+      };
 
   static DateTime? _timeFrom(Object? v) {
     if (v is! String || v.isEmpty) return null;

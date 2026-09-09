@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase/supabase.dart';
 
+import '../models/group.dart';
 import '../models/note.dart';
 import 'note_repo.dart';
 import 'sync_config.dart';
@@ -34,6 +35,7 @@ class SyncService extends ChangeNotifier {
   }
 
   static const String _table = 'notes';
+  static const String _groupsTable = 'groups';
   static const Duration _pullInterval = Duration(seconds: 60);
   static const Duration _pushDebounce = Duration(milliseconds: 800);
 
@@ -153,6 +155,18 @@ class SyncService extends ChangeNotifier {
   }
 
   Future<void> _push(SupabaseClient db) async {
+    // Push group trước note: không có FK thật giữa 2 bảng, nhưng group nên
+    // có mặt trước để máy khác merge note vào không bị "group lạ".
+    final dirtyGroups = _repo.dirtyGroups();
+    if (dirtyGroups.isNotEmpty) {
+      final stamps = {for (final g in dirtyGroups) g.id: g.updatedAt};
+      await db.from(_groupsTable).upsert(
+            dirtyGroups.map((g) => g.toRow()).toList(),
+            onConflict: 'id',
+          );
+      _repo.markGroupsPushed(stamps);
+    }
+
     final dirty = _repo.dirtyNotes();
     if (dirty.isEmpty) return;
 
@@ -167,27 +181,40 @@ class SyncService extends ChangeNotifier {
 
   Future<void> _pull(SupabaseClient db) async {
     final since = _repo.lastPull;
-    final builder = db.from(_table).select();
-    final rows = since == null
-        ? await builder
-        : await builder.gte('updated_at', since);
 
-    final notes = rows.map(Note.fromRow).toList();
-    if (notes.isEmpty) return;
+    final noteBuilder = db.from(_table).select();
+    final noteRows = since == null
+        ? await noteBuilder
+        : await noteBuilder.gte('updated_at', since);
+
+    final groupBuilder = db.from(_groupsTable).select();
+    final groupRows = since == null
+        ? await groupBuilder
+        : await groupBuilder.gte('updated_at', since);
+
+    final notes = noteRows.map(Note.fromRow).toList();
+    final incomingGroups = groupRows.map(Group.fromRow).toList();
 
     var cursor = _repo.lastPull;
     for (final note in notes) {
       final iso = note.updatedAt.toIso8601String();
       if (cursor == null || iso.compareTo(cursor) > 0) cursor = iso;
     }
-    _repo.mergeRemote(notes, newLastPull: cursor);
+    for (final group in incomingGroups) {
+      final iso = group.updatedAt.toIso8601String();
+      if (cursor == null || iso.compareTo(cursor) > 0) cursor = iso;
+    }
+
+    if (notes.isNotEmpty) _repo.mergeRemote(notes);
+    if (incomingGroups.isNotEmpty) _repo.mergeRemoteGroups(incomingGroups);
+    if (cursor != null) _repo.setLastPull(cursor);
   }
 
   Future<void> _openChannel() async {
     final db = _client;
     if (db == null) return;
     await _closeChannel();
-    _channel = db.channel('public:$_table')
+    _channel = db.channel('public:sync')
       ..onPostgresChanges(
         event: PostgresChangeEvent.all,
         schema: 'public',
@@ -197,6 +224,20 @@ class SyncService extends ChangeNotifier {
           if (record.isEmpty) return;
           try {
             _repo.mergeRemote([Note.fromRow(record)]);
+          } catch (_) {
+            // Row lạ/thiếu field thì bỏ qua, lần pull sau sẽ lấy lại.
+          }
+        },
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: _groupsTable,
+        callback: (payload) {
+          final record = payload.newRecord;
+          if (record.isEmpty) return;
+          try {
+            _repo.mergeRemoteGroups([Group.fromRow(record)]);
           } catch (_) {
             // Row lạ/thiếu field thì bỏ qua, lần pull sau sẽ lấy lại.
           }
@@ -239,7 +280,7 @@ class SyncService extends ChangeNotifier {
       // RLS chặn / thiếu bảng thì message của Postgres khá tối nghĩa — nói rõ
       // phải làm gì, kèm link SQL Editor của đúng project đang cấu hình.
       if (e.code == '42501' || e.message.contains('row-level security')) {
-        return 'Bảng notes chặn ghi (RLS) — schema chưa được migrate.\n'
+        return 'Bảng notes/groups chặn ghi (RLS) — schema chưa được migrate.\n'
             'Dán supabase/schema.sql vào SQL Editor rồi Run:\n'
             '$_sqlEditorUrl';
       }
@@ -249,7 +290,7 @@ class SyncService extends ChangeNotifier {
             '$_sqlEditorUrl';
       }
       if (e.code == 'PGRST205' || e.message.contains('does not exist')) {
-        return 'Project ${_config.projectRef} chưa có bảng notes.\n'
+        return 'Project ${_config.projectRef} chưa có đủ bảng notes/groups.\n'
             'Dán supabase/schema.sql vào SQL Editor rồi Run:\n'
             '$_sqlEditorUrl';
       }
