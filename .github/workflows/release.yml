@@ -60,6 +60,7 @@ jobs:
         with:
           name: macos
           path: BF-StickyTask-macos.zip
+          retention-days: 1
 
   # ── Windows ─────────────────────────────────────────────────────────────────
   windows:
@@ -96,6 +97,7 @@ jobs:
         with:
           name: windows
           path: BF-StickyTask-windows.zip
+          retention-days: 1
 
   # ── Android ─────────────────────────────────────────────────────────────────
   android:
@@ -205,6 +207,7 @@ jobs:
         with:
           name: android
           path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 1
 
   # ── Release ─────────────────────────────────────────────────────────────────
   release:
@@ -226,3 +229,4 @@ jobs:
         with:
           files: out/*
           generate_release_notes: true
+
